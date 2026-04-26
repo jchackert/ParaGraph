@@ -1,5 +1,5 @@
 from pathlib import Path
-from graphify.detect import classify_file, count_words, detect, FileType, _looks_like_paper, _is_ignored, _load_graphifyignore
+from paragraph.detect import classify_file, count_words, detect, FileType, _looks_like_paper, _is_ignored, _load_paragraphignore
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -74,15 +74,15 @@ def test_classify_md_doc_without_signals(tmp_path):
 
 def test_classify_attention_paper():
     """The real attention paper file should be classified as PAPER."""
-    paper_path = Path("/home/safi/graphify_eval/papers/attention_is_all_you_need.md")
+    paper_path = Path("/home/safi/paragraph_eval/papers/attention_is_all_you_need.md")
     if paper_path.exists():
         result = classify_file(paper_path)
         assert result == FileType.PAPER
 
 
-def test_graphifyignore_excludes_file(tmp_path):
-    """Files matching .graphifyignore patterns are excluded from detect()."""
-    (tmp_path / ".graphifyignore").write_text("vendor/\n*.generated.py\n")
+def test_paragraphignore_excludes_file(tmp_path):
+    """Files matching .paragraphignore patterns are excluded from detect()."""
+    (tmp_path / ".paragraphignore").write_text("vendor/\n*.generated.py\n")
     vendor = tmp_path / "vendor"
     vendor.mkdir()
     (vendor / "lib.py").write_text("x = 1")
@@ -94,19 +94,19 @@ def test_graphifyignore_excludes_file(tmp_path):
     assert any("main.py" in f for f in file_list)
     assert not any("vendor" in f for f in file_list)
     assert not any("generated" in f for f in file_list)
-    assert result["graphifyignore_patterns"] == 2
+    assert result["paragraphignore_patterns"] == 2
 
 
-def test_graphifyignore_missing_is_fine(tmp_path):
-    """No .graphifyignore is not an error."""
+def test_paragraphignore_missing_is_fine(tmp_path):
+    """No .paragraphignore is not an error."""
     (tmp_path / "main.py").write_text("x = 1")
     result = detect(tmp_path)
-    assert result["graphifyignore_patterns"] == 0
+    assert result["paragraphignore_patterns"] == 0
 
 
-def test_graphifyignore_comments_ignored(tmp_path):
-    """Comment lines in .graphifyignore are not treated as patterns."""
-    (tmp_path / ".graphifyignore").write_text("# this is a comment\n\nmain.py\n")
+def test_paragraphignore_comments_ignored(tmp_path):
+    """Comment lines in .paragraphignore are not treated as patterns."""
+    (tmp_path / ".paragraphignore").write_text("# this is a comment\n\nmain.py\n")
     (tmp_path / "main.py").write_text("x = 1")
     (tmp_path / "other.py").write_text("x = 2")
     result = detect(tmp_path)
@@ -138,9 +138,9 @@ def test_detect_follows_symlinked_file(tmp_path):
     assert any("link.py" in f for f in code)
 
 
-def test_graphifyignore_discovered_from_parent(tmp_path):
-    """A .graphifyignore in a parent directory applies to subdirectory scans."""
-    (tmp_path / ".graphifyignore").write_text("vendor/\n")
+def test_paragraphignore_discovered_from_parent(tmp_path):
+    """A .paragraphignore in a parent directory applies to subdirectory scans."""
+    (tmp_path / ".paragraphignore").write_text("vendor/\n")
     sub = tmp_path / "packages" / "mylib"
     sub.mkdir(parents=True)
     (sub / "main.py").write_text("x = 1")
@@ -152,12 +152,12 @@ def test_graphifyignore_discovered_from_parent(tmp_path):
     code_files = result["files"]["code"]
     assert any("main.py" in f for f in code_files)
     assert not any("vendor" in f for f in code_files)
-    assert result["graphifyignore_patterns"] >= 1
+    assert result["paragraphignore_patterns"] >= 1
 
 
-def test_graphifyignore_stops_at_git_boundary(tmp_path):
+def test_paragraphignore_stops_at_git_boundary(tmp_path):
     """Upward search stops at the git repo root (.git directory)."""
-    (tmp_path / ".graphifyignore").write_text("main.py\n")
+    (tmp_path / ".paragraphignore").write_text("main.py\n")
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".git").mkdir()
@@ -168,15 +168,15 @@ def test_graphifyignore_stops_at_git_boundary(tmp_path):
     result = detect(sub)
     code_files = result["files"]["code"]
     assert any("main.py" in f for f in code_files)
-    assert result["graphifyignore_patterns"] == 0
+    assert result["paragraphignore_patterns"] == 0
 
 
-def test_graphifyignore_at_git_root_is_included(tmp_path):
-    """A .graphifyignore at the git repo root is included when scanning a subdir."""
+def test_paragraphignore_at_git_root_is_included(tmp_path):
+    """A .paragraphignore at the git repo root is included when scanning a subdir."""
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / ".git").mkdir()
-    (repo / ".graphifyignore").write_text("vendor/\n")
+    (repo / ".paragraphignore").write_text("vendor/\n")
     sub = repo / "packages" / "mylib"
     sub.mkdir(parents=True)
     (sub / "main.py").write_text("x = 1")
@@ -188,7 +188,7 @@ def test_graphifyignore_at_git_root_is_included(tmp_path):
     code_files = result["files"]["code"]
     assert any("main.py" in f for f in code_files)
     assert not any("vendor" in f for f in code_files)
-    assert result["graphifyignore_patterns"] == 1
+    assert result["paragraphignore_patterns"] == 1
 
 
 def test_detect_handles_circular_symlinks(tmp_path):
@@ -203,7 +203,7 @@ def test_detect_handles_circular_symlinks(tmp_path):
 
 def test_classify_video_extensions():
     """Video and audio file extensions should classify as VIDEO."""
-    from graphify.detect import FileType
+    from paragraph.detect import FileType
     assert classify_file(Path("lecture.mp4")) == FileType.VIDEO
     assert classify_file(Path("podcast.mp3")) == FileType.VIDEO
     assert classify_file(Path("talk.mov")) == FileType.VIDEO

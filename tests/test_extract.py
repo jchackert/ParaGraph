@@ -1,5 +1,5 @@
 from pathlib import Path
-from graphify.extract import extract_python, extract, collect_files, _make_id
+from paragraph.extract import extract_python, extract, collect_files, _make_id
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

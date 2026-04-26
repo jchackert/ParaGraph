@@ -1,6 +1,6 @@
 # Architecture
 
-graphify is a Claude Code skill backed by a Python library. The skill orchestrates the library; the library can be used standalone.
+paragraph is a Claude Code skill backed by a Python library. The skill orchestrates the library; the library can be used standalone.
 
 ## Pipeline
 
@@ -64,7 +64,7 @@ Every extractor returns:
 
 ## Security
 
-All external input passes through `graphify/security.py` before use:
+All external input passes through `paragraph/security.py` before use:
 
 - URLs → `validate_url()` (http/https only) + `_NoFileRedirectHandler` (blocks file:// redirects)
 - Fetched content → `safe_fetch()` / `safe_fetch_text()` (size cap, timeout)

@@ -1,4 +1,4 @@
-"""Tests for hyperedge support in graphify."""
+"""Tests for hyperedge support in paragraph."""
 from __future__ import annotations
 import json
 import tempfile
@@ -7,9 +7,9 @@ from pathlib import Path
 import networkx as nx
 import pytest
 
-from graphify.build import build_from_json
-from graphify.export import attach_hyperedges, to_json
-from graphify.report import generate
+from paragraph.build import build_from_json
+from paragraph.export import attach_hyperedges, to_json
+from paragraph.report import generate
 
 
 # ---------------------------------------------------------------------------

@@ -1,11 +1,11 @@
-"""Tests for graphify/benchmark.py."""
+"""Tests for paragraph/benchmark.py."""
 from __future__ import annotations
 import json
 import pytest
 import networkx as nx
 from networkx.readwrite import json_graph
 
-from graphify.benchmark import run_benchmark, print_benchmark, _query_subgraph_tokens, _SAMPLE_QUESTIONS
+from paragraph.benchmark import run_benchmark, print_benchmark, _query_subgraph_tokens, _SAMPLE_QUESTIONS
 
 
 def _make_graph() -> nx.Graph:

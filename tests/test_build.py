@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from graphify.build import build_from_json, build
+from paragraph.build import build_from_json, build
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

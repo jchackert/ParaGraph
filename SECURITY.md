@@ -22,7 +22,7 @@ We will acknowledge receipt within 48 hours and aim to release a fix within 7 da
 
 ## Security Model
 
-graphify is a **local development tool**. It runs as a Claude Code skill and optionally as a local MCP stdio server. It makes no network calls during graph analysis - only during `ingest` (explicit URL fetch by the user).
+paragraph is a **local development tool**. It runs as a Claude Code skill and optionally as a local MCP stdio server. It makes no network calls during graph analysis - only during `ingest` (explicit URL fetch by the user).
 
 ### Threat Surface
 
@@ -39,7 +39,7 @@ graphify is a **local development tool**. It runs as a Claude Code skill and opt
 | Symlink traversal | `os.walk(..., followlinks=False)` is explicit throughout `detect.py`. |
 | Corrupted graph.json | `_load_graph()` in `serve.py` wraps `json.JSONDecodeError` and prints a clear recovery message instead of crashing. |
 
-### What graphify does NOT do
+### What paragraph does NOT do
 
 - Does not run a network listener (MCP server communicates over stdio only)
 - Does not execute code from source files (tree-sitter parses ASTs - no eval/exec)

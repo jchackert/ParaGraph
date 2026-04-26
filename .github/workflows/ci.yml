@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: ["v1", "v2", "v3", "v4", "main"]
+    branches: ["main"]
   pull_request:
-    branches: ["v1", "v2", "v3", "v4", "main"]
+    branches: ["main"]
 
 jobs:
   test:
@@ -32,5 +32,5 @@ jobs:
 
       - name: Verify install works end-to-end
         run: |
-          graphify --help
-          graphify install
+          paragraph --help
+          paragraph install

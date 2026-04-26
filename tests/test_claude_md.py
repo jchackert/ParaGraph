@@ -1,7 +1,7 @@
-"""Tests for graphify claude install / uninstall commands."""
+"""Tests for paragraph claude install / uninstall commands."""
 from pathlib import Path
 import pytest
-from graphify.__main__ import claude_install, claude_uninstall, _CLAUDE_MD_MARKER, _CLAUDE_MD_SECTION
+from paragraph.__main__ import claude_install, claude_uninstall, _CLAUDE_MD_MARKER, _CLAUDE_MD_SECTION
 
 
 # ---------------------------------------------------------------------------
@@ -22,7 +22,7 @@ def test_install_contains_expected_rules(tmp_path):
     content = (tmp_path / "CLAUDE.md").read_text()
     assert "GRAPH_REPORT.md" in content
     assert "wiki/index.md" in content
-    assert "graphify update" in content
+    assert "paragraph update" in content
 
 
 def test_install_appends_to_existing_claude_md(tmp_path):
@@ -59,7 +59,7 @@ def test_install_idempotent_message(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 def test_uninstall_removes_section(tmp_path):
-    """Removes the graphify section after it was installed."""
+    """Removes the paragraph section after it was installed."""
     claude_install(tmp_path)
     claude_uninstall(tmp_path)
     target = tmp_path / "CLAUDE.md"
@@ -69,7 +69,7 @@ def test_uninstall_removes_section(tmp_path):
 
 
 def test_uninstall_preserves_other_content(tmp_path):
-    """Uninstall keeps pre-existing content outside the graphify section."""
+    """Uninstall keeps pre-existing content outside the paragraph section."""
     target = tmp_path / "CLAUDE.md"
     target.write_text("# My Project\n\nSome rules.\n")
     claude_install(tmp_path)
@@ -82,7 +82,7 @@ def test_uninstall_preserves_other_content(tmp_path):
 
 
 def test_uninstall_no_op_when_not_installed(tmp_path, capsys):
-    """Uninstall on a CLAUDE.md without graphify section prints a message and exits cleanly."""
+    """Uninstall on a CLAUDE.md without paragraph section prints a message and exits cleanly."""
     target = tmp_path / "CLAUDE.md"
     target.write_text("# Other stuff\n")
     claude_uninstall(tmp_path)

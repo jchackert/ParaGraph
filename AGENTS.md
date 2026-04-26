@@ -1,8 +1,6 @@
-## graphify
+# Contributing
 
-This project has a graphify knowledge graph at graphify-out/.
+ParaGraph is a Claude Code-only fork of [graphify](https://github.com/safishamsi/graphify).
 
-Rules:
-- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
-- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
-- After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the module structure.
+See [SECURITY.md](SECURITY.md) for the threat model.
