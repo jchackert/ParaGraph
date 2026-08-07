@@ -3391,9 +3391,9 @@ def collect_files(target: Path, *, follow_symlinks: bool = False, root: Path | N
         ".lua", ".toc", ".zig", ".ps1",
         ".m", ".mm",
     }
-    from paragraph.detect import _load_graphifyignore, _is_ignored
+    from paragraph.detect import _load_paragraphignore, _is_ignored
     ignore_root = root if root is not None else target
-    patterns = _load_graphifyignore(ignore_root)
+    patterns = _load_paragraphignore(ignore_root)
 
     def _ignored(p: Path) -> bool:
         return bool(patterns and _is_ignored(p, ignore_root, patterns))

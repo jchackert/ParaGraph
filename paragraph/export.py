@@ -966,11 +966,33 @@ def to_graphml(
 
     Community IDs are written as a node attribute so Gephi can colour by community.
     Edge confidence (EXTRACTED/INFERRED/AMBIGUOUS) is preserved as an edge attribute.
+
+    GraphML only supports scalar attribute values (str/int/float/bool), so
+    non-scalar graph/node/edge attributes (dicts, lists — e.g. hyperedges,
+    community_labels) are JSON-stringified rather than dropped: the data
+    survives the round-trip and consumers can json.loads() it back. None
+    values are dropped (GraphML has no null representation).
     """
+    import json as _json
+
+    def _sanitize(attrs: dict) -> None:
+        for key in list(attrs.keys()):
+            value = attrs[key]
+            if value is None:
+                del attrs[key]
+            elif not isinstance(value, (str, int, float, bool)):
+                attrs[key] = _json.dumps(value, default=str)
+
     H = G.copy()
     node_community = _node_community_map(communities)
     for node_id in H.nodes():
         H.nodes[node_id]["community"] = node_community.get(node_id, -1)
+
+    _sanitize(H.graph)
+    for _, node_attrs in H.nodes(data=True):
+        _sanitize(node_attrs)
+    for _, _, edge_attrs in H.edges(data=True):
+        _sanitize(edge_attrs)
     nx.write_graphml(H, output_path)
 
 

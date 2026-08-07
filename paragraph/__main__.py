@@ -139,6 +139,18 @@ def claude_install(project_dir: Path | None = None) -> None:
     print("codebase questions and rebuild it after code changes.")
 
 
+def _is_paragraph_hook(hook: dict) -> bool:
+    """True if a settings.json PreToolUse entry is ours.
+
+    Matches on either 'paragraph' or 'graphify' in the payload — the hook
+    command text still says 'graphify' (legacy name), and settings written
+    by older versions must also be recognised for dedup and uninstall.
+    """
+    return hook.get("matcher") == "Glob|Grep" and (
+        "paragraph" in str(hook) or "graphify" in str(hook)
+    )
+
+
 def _install_claude_hook(project_dir: Path) -> None:
     """Add graphify PreToolUse hook to .claude/settings.json."""
     settings_path = project_dir / ".claude" / "settings.json"
@@ -155,7 +167,7 @@ def _install_claude_hook(project_dir: Path) -> None:
     hooks = settings.setdefault("hooks", {})
     pre_tool = hooks.setdefault("PreToolUse", [])
 
-    hooks["PreToolUse"] = [h for h in pre_tool if not (h.get("matcher") == "Glob|Grep" and "paragraph" in str(h))]
+    hooks["PreToolUse"] = [h for h in pre_tool if not _is_paragraph_hook(h)]
     hooks["PreToolUse"].append(_SETTINGS_HOOK)
     settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
     print(f"  .claude/settings.json  ->  PreToolUse hook registered")
@@ -171,7 +183,7 @@ def _uninstall_claude_hook(project_dir: Path) -> None:
     except json.JSONDecodeError:
         return
     pre_tool = settings.get("hooks", {}).get("PreToolUse", [])
-    filtered = [h for h in pre_tool if not (h.get("matcher") == "Glob|Grep" and "paragraph" in str(h))]
+    filtered = [h for h in pre_tool if not _is_paragraph_hook(h)]
     if len(filtered) == len(pre_tool):
         return
     settings["hooks"]["PreToolUse"] = filtered

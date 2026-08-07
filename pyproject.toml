@@ -10,12 +10,26 @@ readme = "README.md"
 license = { file = "LICENSE" }
 keywords = ["claude", "claude-code", "knowledge-graph", "rag", "graphrag", "tree-sitter", "leiden"]
 requires-python = ">=3.10,<3.14"
+# Hard deps cover this fork's real corpus: Swift app, Python scripts, JS/TS docs.
+# All other grammars are optional — install with `paragraph[languages]`.
+# A missing grammar degrades gracefully: that language is skipped with a note
+# in the extraction output ("<module> not installed"), never a crash.
 dependencies = [
     "networkx",
     "tree-sitter>=0.23.0",
     "tree-sitter-python",
+    "tree-sitter-swift",
     "tree-sitter-javascript",
     "tree-sitter-typescript",
+]
+
+[project.urls]
+Homepage = "https://github.com/jchackert/ParaGraph"
+Repository = "https://github.com/jchackert/ParaGraph"
+Issues = "https://github.com/jchackert/ParaGraph/issues"
+
+[project.optional-dependencies]
+languages = [
     "tree-sitter-go",
     "tree-sitter-rust",
     "tree-sitter-java",
@@ -26,7 +40,6 @@ dependencies = [
     "tree-sitter-kotlin",
     "tree-sitter-scala",
     "tree-sitter-php",
-    "tree-sitter-swift",
     "tree-sitter-lua",
     "tree-sitter-zig",
     "tree-sitter-powershell",
@@ -35,13 +48,6 @@ dependencies = [
     "tree-sitter-julia",
     "tree-sitter-verilog",
 ]
-
-[project.urls]
-Homepage = "https://github.com/jchackert/ParaGraph"
-Repository = "https://github.com/jchackert/ParaGraph"
-Issues = "https://github.com/jchackert/ParaGraph/issues"
-
-[project.optional-dependencies]
 mcp = ["mcp"]
 neo4j = ["neo4j"]
 pdf = ["pypdf", "html2text"]
@@ -50,7 +56,12 @@ svg = ["matplotlib"]
 leiden = ["graspologic; python_version < '3.13'"]
 office = ["python-docx", "openpyxl"]
 video = ["faster-whisper", "yt-dlp"]
-all = ["mcp", "neo4j", "pypdf", "html2text", "watchdog", "graspologic; python_version < '3.13'", "python-docx", "openpyxl", "faster-whisper", "yt-dlp", "matplotlib"]
+all = [
+    "paragraph[languages]",
+    "mcp", "neo4j", "pypdf", "html2text", "watchdog",
+    "graspologic; python_version < '3.13'",
+    "python-docx", "openpyxl", "faster-whisper", "yt-dlp", "matplotlib",
+]
 
 [project.scripts]
 paragraph = "paragraph.__main__:main"

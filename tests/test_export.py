@@ -80,6 +80,30 @@ def test_to_graphml_has_community_attribute():
         content = out.read_text()
         assert "community" in content
 
+def test_to_graphml_json_stringifies_non_scalar_attrs():
+    """GraphML only supports scalar attr values; non-scalars (dicts/lists like
+    hyperedges or community_labels) are JSON-stringified — chosen over dropping
+    them because the data round-trips: read the graph back, json.loads() the
+    attribute, and the original structure is recovered. None values are dropped
+    (GraphML has no null)."""
+    import networkx as nx
+    G = make_graph()
+    communities = cluster(G)  # cluster() itself writes dict attrs into G.graph
+    G.graph["community_labels"] = {"0": "core", "1": "docs"}
+    G.graph["hyperedges"] = [["a", "b", "c"]]
+    G.graph["dropped_none"] = None
+    first_node = next(iter(G.nodes()))
+    G.nodes[first_node]["aliases"] = ["alt-name"]
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "graph.graphml"
+        to_graphml(G, communities, str(out))
+        H = nx.read_graphml(str(out))
+        # Round-trip: JSON-stringified attrs decode back to the original value
+        assert json.loads(H.graph["community_labels"]) == {"0": "core", "1": "docs"}
+        assert json.loads(H.graph["hyperedges"]) == [["a", "b", "c"]]
+        assert "dropped_none" not in H.graph
+        assert json.loads(H.nodes[first_node]["aliases"]) == ["alt-name"]
+
 def test_to_html_creates_file():
     G = make_graph()
     communities = cluster(G)

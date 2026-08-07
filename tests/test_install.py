@@ -1,321 +1,109 @@
-"""Tests for paragraph install --platform routing."""
+"""Tests for `paragraph install` — the Claude-only global skill install.
+
+This fork supports only Claude Code. install() copies the packaged skill.md
+to ~/.claude/skills/paragraph/SKILL.md (or $CLAUDE_CONFIG_DIR/skills/...),
+stamps .paragraph_version, and registers the skill in ~/.claude/CLAUDE.md.
+
+Project-level CLAUDE.md + settings.json hook install is covered by
+test_claude_md.py; git hook install is covered by test_hooks.py.
+"""
 from pathlib import Path
 from unittest.mock import patch
+
 import pytest
 
 
-PLATFORMS = {
-    "claude": (".claude/skills/paragraph/SKILL.md",),
-    "codex": (".agents/skills/paragraph/SKILL.md",),
-    "opencode": (".config/opencode/skills/paragraph/SKILL.md",),
-    "claw": (".openclaw/skills/paragraph/SKILL.md",),
-    "droid": (".factory/skills/paragraph/SKILL.md",),
-    "trae": (".trae/skills/paragraph/SKILL.md",),
-    "trae-cn": (".trae-cn/skills/paragraph/SKILL.md",),
-    "windows": (".claude/skills/paragraph/SKILL.md",),
-}
+@pytest.fixture(autouse=True)
+def _no_config_dir_env(monkeypatch):
+    """Ensure the ambient CLAUDE_CONFIG_DIR never leaks into these tests."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
 
-def _install(tmp_path, platform):
+def _install(tmp_path):
     from paragraph.__main__ import install
     with patch("paragraph.__main__.Path.home", return_value=tmp_path):
-        install(platform=platform)
+        install()
 
 
-def test_install_default_claude(tmp_path):
-    _install(tmp_path, "claude")
-    assert (tmp_path / ".claude" / "skills" / "paragraph" / "SKILL.md").exists()
-
-
-def test_install_codex(tmp_path):
-    _install(tmp_path, "codex")
-    assert (tmp_path / ".agents" / "skills" / "paragraph" / "SKILL.md").exists()
-
-
-def test_install_opencode(tmp_path):
-    _install(tmp_path, "opencode")
-    assert (tmp_path / ".config" / "opencode" / "skills" / "paragraph" / "SKILL.md").exists()
-
-
-def test_install_claw(tmp_path):
-    _install(tmp_path, "claw")
-    assert (tmp_path / ".openclaw" / "skills" / "paragraph" / "SKILL.md").exists()
-
-
-def test_install_droid(tmp_path):
-    _install(tmp_path, "droid")
-    assert (tmp_path / ".factory" / "skills" / "paragraph" / "SKILL.md").exists()
-
-
-def test_install_trae(tmp_path):
-    _install(tmp_path, "trae")
-    assert (tmp_path / ".trae" / "skills" / "paragraph" / "SKILL.md").exists()
-
-
-def test_install_trae_cn(tmp_path):
-    _install(tmp_path, "trae-cn")
-    assert (tmp_path / ".trae-cn" / "skills" / "paragraph" / "SKILL.md").exists()
-
-
-def test_install_windows(tmp_path):
-    _install(tmp_path, "windows")
-    assert (tmp_path / ".claude" / "skills" / "paragraph" / "SKILL.md").exists()
-
-
-def test_install_unknown_platform_exits(tmp_path):
-    with pytest.raises(SystemExit):
-        _install(tmp_path, "unknown")
-
-
-def test_codex_skill_contains_spawn_agent():
-    """Codex skill file must reference spawn_agent."""
+def test_install_copies_skill(tmp_path):
+    """install() places SKILL.md under ~/.claude/skills/paragraph/."""
+    _install(tmp_path)
+    dst = tmp_path / ".claude" / "skills" / "paragraph" / "SKILL.md"
+    assert dst.exists()
     import paragraph
-    skill = (Path(paragraph.__file__).parent / "skill-codex.md").read_text()
-    assert "spawn_agent" in skill
+    src = Path(paragraph.__file__).parent / "skill.md"
+    assert dst.read_text() == src.read_text()
 
 
-def test_opencode_skill_contains_mention():
-    """OpenCode skill file must reference @mention."""
-    import paragraph
-    skill = (Path(paragraph.__file__).parent / "skill-opencode.md").read_text()
-    assert "@mention" in skill
+def test_install_writes_version_stamp(tmp_path):
+    """install() stamps .paragraph_version with the package version."""
+    from paragraph.__main__ import __version__
+    _install(tmp_path)
+    stamp = tmp_path / ".claude" / "skills" / "paragraph" / ".paragraph_version"
+    assert stamp.exists()
+    assert stamp.read_text().strip() == __version__
 
 
-def test_claw_skill_is_sequential():
-    """OpenClaw skill file must describe sequential extraction."""
-    import paragraph
-    skill = (Path(paragraph.__file__).parent / "skill-claw.md").read_text()
-    assert "sequential" in skill.lower()
-    assert "spawn_agent" not in skill
-    assert "@mention" not in skill
+def test_install_creates_claude_md_registration(tmp_path):
+    """install() creates ~/.claude/CLAUDE.md with the skill trigger when absent."""
+    _install(tmp_path)
+    claude_md = tmp_path / ".claude" / "CLAUDE.md"
+    assert claude_md.exists()
+    content = claude_md.read_text()
+    assert "/paragraph" in content
+    assert "SKILL.md" in content
 
 
-def test_all_skill_files_exist_in_package():
-    """All installable platform skill files must be present in the installed package."""
-    import paragraph
-    pkg = Path(paragraph.__file__).parent
-    for name in ("skill.md", "skill-codex.md", "skill-opencode.md", "skill-claw.md", "skill-windows.md", "skill-droid.md", "skill-trae.md"):
-        assert (pkg / name).exists(), f"Missing: {name}"
-
-
-def test_claude_install_registers_claude_md(tmp_path):
-    """Claude platform install writes CLAUDE.md; others do not."""
-    _install(tmp_path, "claude")
-    assert (tmp_path / ".claude" / "CLAUDE.md").exists()
-
-
-def test_codex_install_does_not_write_claude_md(tmp_path):
-    _install(tmp_path, "codex")
-    assert not (tmp_path / ".claude" / "CLAUDE.md").exists()
-
-
-# --- always-on AGENTS.md install/uninstall tests ---
-
-def _agents_install(tmp_path, platform):
-    from paragraph.__main__ import _agents_install as _install_fn
-    _install_fn(tmp_path, platform)
-
-
-def _agents_uninstall(tmp_path, platform=""):
-    from paragraph.__main__ import _agents_uninstall as _uninstall_fn
-    _uninstall_fn(tmp_path, platform=platform)
-
-
-def test_codex_agents_install_writes_agents_md(tmp_path):
-    _agents_install(tmp_path, "codex")
-    agents_md = tmp_path / "AGENTS.md"
-    assert agents_md.exists()
-    assert "paragraph" in agents_md.read_text()
-    assert "GRAPH_REPORT.md" in agents_md.read_text()
-
-
-def test_opencode_agents_install_writes_agents_md(tmp_path):
-    _agents_install(tmp_path, "opencode")
-    assert (tmp_path / "AGENTS.md").exists()
-
-
-def test_claw_agents_install_writes_agents_md(tmp_path):
-    _agents_install(tmp_path, "claw")
-    assert (tmp_path / "AGENTS.md").exists()
-
-
-def test_agents_install_idempotent(tmp_path):
-    """Installing twice does not duplicate the section."""
-    _agents_install(tmp_path, "codex")
-    _agents_install(tmp_path, "codex")
-    content = (tmp_path / "AGENTS.md").read_text()
-    assert content.count("## paragraph") == 1
-
-
-def test_agents_install_appends_to_existing(tmp_path):
-    """Installs into an existing AGENTS.md without overwriting other content."""
-    agents_md = tmp_path / "AGENTS.md"
-    agents_md.write_text("# Existing rules\n\nDo not break things.\n")
-    _agents_install(tmp_path, "codex")
-    content = agents_md.read_text()
+def test_install_appends_to_existing_claude_md(tmp_path):
+    """install() preserves existing global CLAUDE.md content."""
+    claude_md = tmp_path / ".claude" / "CLAUDE.md"
+    claude_md.parent.mkdir(parents=True)
+    claude_md.write_text("# My rules\n\nDo not break things.\n")
+    _install(tmp_path)
+    content = claude_md.read_text()
     assert "Do not break things." in content
-    assert "## paragraph" in content
+    assert "/paragraph" in content
 
 
-def test_agents_uninstall_removes_section(tmp_path):
-    _agents_install(tmp_path, "codex")
-    _agents_uninstall(tmp_path)
-    agents_md = tmp_path / "AGENTS.md"
-    # File deleted when it only contained paragraph section
-    assert not agents_md.exists()
+def test_install_registration_idempotent(tmp_path):
+    """Installing twice does not duplicate the CLAUDE.md registration."""
+    _install(tmp_path)
+    _install(tmp_path)
+    content = (tmp_path / ".claude" / "CLAUDE.md").read_text()
+    assert content.count("# graphify") == 1
 
 
-def test_agents_uninstall_preserves_other_content(tmp_path):
-    """Uninstall keeps pre-existing content."""
-    agents_md = tmp_path / "AGENTS.md"
-    agents_md.write_text("# Existing rules\n\nDo not break things.\n")
-    _agents_install(tmp_path, "codex")
-    _agents_uninstall(tmp_path)
-    assert agents_md.exists()
-    content = agents_md.read_text()
-    assert "Do not break things." in content
-    assert "## paragraph" not in content
+def test_install_skill_copy_idempotent(tmp_path):
+    """Re-running install() refreshes the skill file without error."""
+    _install(tmp_path)
+    dst = tmp_path / ".claude" / "skills" / "paragraph" / "SKILL.md"
+    dst.write_text("stale contents")
+    _install(tmp_path)
+    assert dst.read_text() != "stale contents"  # refreshed from package
 
 
-def test_agents_uninstall_no_op_when_not_installed(tmp_path, capsys):
-    _agents_uninstall(tmp_path)
-    out = capsys.readouterr().out
-    assert "nothing to do" in out
+def test_install_respects_claude_config_dir(tmp_path, monkeypatch):
+    """CLAUDE_CONFIG_DIR overrides the skill destination directory."""
+    config_dir = tmp_path / "custom-config"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    home = tmp_path / "home"
+    home.mkdir()
+    from paragraph.__main__ import install
+    with patch("paragraph.__main__.Path.home", return_value=home):
+        install()
+    assert (config_dir / "skills" / "paragraph" / "SKILL.md").exists()
+    # Skill must NOT also land in the default home location
+    assert not (home / ".claude" / "skills" / "paragraph" / "SKILL.md").exists()
 
 
-# --- OpenCode plugin tests ---
-
-def test_opencode_agents_install_writes_plugin(tmp_path):
-    """opencode install writes .opencode/plugins/paragraph.js."""
-    _agents_install(tmp_path, "opencode")
-    plugin = tmp_path / ".opencode" / "plugins" / "paragraph.js"
-    assert plugin.exists()
-    assert "tool.execute.before" in plugin.read_text()
+def test_skill_file_exists_in_package():
+    """The Claude skill file must ship inside the installed package."""
+    import paragraph
+    assert (Path(paragraph.__file__).parent / "skill.md").exists()
 
 
-def test_opencode_agents_install_registers_plugin_in_config(tmp_path):
-    """opencode install registers the plugin in .opencode/opencode.json."""
-    _agents_install(tmp_path, "opencode")
-    config_file = tmp_path / ".opencode" / "opencode.json"
-    assert config_file.exists()
-    import json as _json
-    config = _json.loads(config_file.read_text())
-    assert any("paragraph.js" in p for p in config.get("plugin", []))
-
-
-def test_opencode_agents_install_merges_existing_config(tmp_path):
-    """opencode install preserves existing .opencode/opencode.json keys."""
-    import json as _json
-    config_file = tmp_path / ".opencode" / "opencode.json"
-    config_file.parent.mkdir(parents=True, exist_ok=True)
-    config_file.write_text(_json.dumps({"model": "claude-opus-4-5", "plugin": []}))
-    _agents_install(tmp_path, "opencode")
-    config = _json.loads(config_file.read_text())
-    assert config["model"] == "claude-opus-4-5"
-    assert any("paragraph.js" in p for p in config["plugin"])
-
-
-def test_opencode_agents_uninstall_removes_plugin(tmp_path):
-    """opencode uninstall removes the plugin file and deregisters from opencode.json."""
-    import json as _json
-    _agents_install(tmp_path, "opencode")
-    _agents_uninstall(tmp_path, platform="opencode")
-    plugin = tmp_path / ".opencode" / "plugins" / "paragraph.js"
-    assert not plugin.exists()
-    config_file = tmp_path / ".opencode" / "opencode.json"
-    if config_file.exists():
-        config = _json.loads(config_file.read_text())
-        assert not any("paragraph.js" in p for p in config.get("plugin", []))
-
-
-# ── Cursor ────────────────────────────────────────────────────────────────────
-
-def test_cursor_install_writes_rule(tmp_path):
-    """cursor install writes .cursor/rules/paragraph.mdc."""
-    from paragraph.__main__ import _cursor_install
-    _cursor_install(tmp_path)
-    rule = tmp_path / ".cursor" / "rules" / "paragraph.mdc"
-    assert rule.exists()
-    content = rule.read_text()
-    assert "alwaysApply: true" in content
-    assert "graphify-out/GRAPH_REPORT.md" in content
-
-
-def test_cursor_install_idempotent(tmp_path):
-    """cursor install does not overwrite an existing rule file."""
-    from paragraph.__main__ import _cursor_install
-    _cursor_install(tmp_path)
-    rule = tmp_path / ".cursor" / "rules" / "paragraph.mdc"
-    original = rule.read_text()
-    _cursor_install(tmp_path)
-    assert rule.read_text() == original
-
-
-def test_cursor_uninstall_removes_rule(tmp_path):
-    """cursor uninstall removes the rule file."""
-    from paragraph.__main__ import _cursor_install, _cursor_uninstall
-    _cursor_install(tmp_path)
-    _cursor_uninstall(tmp_path)
-    rule = tmp_path / ".cursor" / "rules" / "paragraph.mdc"
-    assert not rule.exists()
-
-
-def test_cursor_uninstall_noop_if_not_installed(tmp_path):
-    """cursor uninstall does nothing if rule was never written."""
-    from paragraph.__main__ import _cursor_uninstall
-    _cursor_uninstall(tmp_path)  # should not raise
-
-
-# ── Gemini CLI ────────────────────────────────────────────────────────────────
-
-def test_gemini_install_writes_gemini_md(tmp_path):
-    from paragraph.__main__ import gemini_install
-    gemini_install(tmp_path)
-    md = tmp_path / "GEMINI.md"
-    assert md.exists()
-    assert "graphify-out/GRAPH_REPORT.md" in md.read_text()
-
-def test_gemini_install_writes_hook(tmp_path):
-    import json as _json
-    from paragraph.__main__ import gemini_install
-    gemini_install(tmp_path)
-    settings = _json.loads((tmp_path / ".gemini" / "settings.json").read_text())
-    hooks = settings["hooks"]["BeforeTool"]
-    assert any("paragraph" in str(h) for h in hooks)
-
-def test_gemini_install_idempotent(tmp_path):
-    from paragraph.__main__ import gemini_install
-    gemini_install(tmp_path)
-    gemini_install(tmp_path)
-    md = tmp_path / "GEMINI.md"
-    assert md.read_text().count("## paragraph") == 1
-
-def test_gemini_install_merges_existing_gemini_md(tmp_path):
-    from paragraph.__main__ import gemini_install
-    (tmp_path / "GEMINI.md").write_text("# My project rules\n")
-    gemini_install(tmp_path)
-    content = (tmp_path / "GEMINI.md").read_text()
-    assert "# My project rules" in content
-    assert "graphify-out/GRAPH_REPORT.md" in content
-
-def test_gemini_uninstall_removes_section(tmp_path):
-    from paragraph.__main__ import gemini_install, gemini_uninstall
-    gemini_install(tmp_path)
-    gemini_uninstall(tmp_path)
-    md = tmp_path / "GEMINI.md"
-    assert not md.exists()
-
-def test_gemini_uninstall_removes_hook(tmp_path):
-    import json as _json
-    from paragraph.__main__ import gemini_install, gemini_uninstall
-    gemini_install(tmp_path)
-    gemini_uninstall(tmp_path)
-    settings_path = tmp_path / ".gemini" / "settings.json"
-    if settings_path.exists():
-        settings = _json.loads(settings_path.read_text())
-        hooks = settings.get("hooks", {}).get("BeforeTool", [])
-        assert not any("paragraph" in str(h) for h in hooks)
-
-def test_gemini_uninstall_noop_if_not_installed(tmp_path):
-    from paragraph.__main__ import gemini_uninstall
-    gemini_uninstall(tmp_path)  # should not raise
+def test_install_takes_no_platform_argument():
+    """The fork is Claude-only: install() must not accept a platform kwarg."""
+    from paragraph.__main__ import install
+    with pytest.raises(TypeError):
+        install(platform="gemini")

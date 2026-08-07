@@ -97,6 +97,37 @@ def test_paragraphignore_excludes_file(tmp_path):
     assert result["paragraphignore_patterns"] == 2
 
 
+def test_legacy_graphifyignore_still_honored(tmp_path):
+    """A pre-fork .graphifyignore file is read when no .paragraphignore exists."""
+    (tmp_path / ".graphifyignore").write_text("vendor/\n")
+    vendor = tmp_path / "vendor"
+    vendor.mkdir()
+    (vendor / "lib.py").write_text("x = 1")
+    (tmp_path / "main.py").write_text("print('hi')")
+
+    result = detect(tmp_path)
+    file_list = result["files"]["code"]
+    assert any("main.py" in f for f in file_list)
+    assert not any("vendor" in f for f in file_list)
+    assert result["paragraphignore_patterns"] == 1
+
+
+def test_paragraphignore_wins_over_legacy_in_same_dir(tmp_path):
+    """When both files exist in one directory, only .paragraphignore is read."""
+    (tmp_path / ".paragraphignore").write_text("vendor/\n")
+    (tmp_path / ".graphifyignore").write_text("vendor/\nmain.py\n")
+    vendor = tmp_path / "vendor"
+    vendor.mkdir()
+    (vendor / "lib.py").write_text("x = 1")
+    (tmp_path / "main.py").write_text("print('hi')")
+
+    result = detect(tmp_path)
+    file_list = result["files"]["code"]
+    assert any("main.py" in f for f in file_list)  # legacy 'main.py' pattern NOT applied
+    assert not any("vendor" in f for f in file_list)
+    assert result["paragraphignore_patterns"] == 1
+
+
 def test_paragraphignore_missing_is_fine(tmp_path):
     """No .paragraphignore is not an error."""
     (tmp_path / "main.py").write_text("x = 1")

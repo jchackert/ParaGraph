@@ -168,3 +168,33 @@ def test_calls_deduplication():
     result = extract_python(FIXTURES / "sample_calls.py")
     call_pairs = [(e["source"], e["target"]) for e in result["edges"] if e["relation"] == "calls"]
     assert len(call_pairs) == len(set(call_pairs)), "Duplicate calls edges found"
+
+
+def test_missing_grammar_degrades_gracefully(tmp_path, monkeypatch):
+    """An optional grammar that isn't installed must skip the language with a
+    note in the result — never crash. Guards the `languages` optional extra:
+    only python/swift/js/ts grammars are hard deps."""
+    import sys
+    from paragraph.extract import extract_go
+    # Simulate tree-sitter-go not being installed
+    monkeypatch.setitem(sys.modules, "tree_sitter_go", None)
+    go_file = tmp_path / "main.go"
+    go_file.write_text("package main\n\nfunc main() {}\n")
+    result = extract_go(go_file)
+    assert result["nodes"] == []
+    assert result["edges"] == []
+    assert "not installed" in result["error"]
+
+
+def test_missing_grammar_generic_extractor_degrades(tmp_path, monkeypatch):
+    """The generic LanguageConfig extractor also degrades when its grammar
+    module is absent (e.g. tree-sitter-ruby without the languages extra)."""
+    import sys
+    from paragraph.extract import _extract_generic, _RUBY_CONFIG
+    monkeypatch.setitem(sys.modules, "tree_sitter_ruby", None)
+    rb_file = tmp_path / "app.rb"
+    rb_file.write_text("class Foo\n  def bar; end\nend\n")
+    result = _extract_generic(rb_file, _RUBY_CONFIG)
+    assert result["nodes"] == []
+    assert result["edges"] == []
+    assert "not installed" in result["error"]

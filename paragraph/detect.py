@@ -273,11 +273,18 @@ def _load_paragraphignore(root: Path) -> list[tuple[Path, str]]:
 
     Walks upward from *root* towards the filesystem root, stopping at a
     ``.git`` boundary. Lines starting with # are comments; blank lines ignored.
+
+    Legacy compatibility: a directory with no ``.paragraphignore`` falls back
+    to reading ``.graphifyignore`` (the pre-fork filename) so repos that
+    haven't renamed the file keep their ignore rules. When both exist in the
+    same directory, only ``.paragraphignore`` is read.
     """
     patterns: list[tuple[Path, str]] = []
     current = root.resolve()
     while True:
         ignore_file = current / ".paragraphignore"
+        if not ignore_file.exists():
+            ignore_file = current / ".graphifyignore"  # legacy filename
         if ignore_file.exists():
             for line in ignore_file.read_text(encoding="utf-8", errors="ignore").splitlines():
                 line = line.strip()
