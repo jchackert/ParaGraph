@@ -3,7 +3,7 @@ import sys
 import networkx as nx
 from pathlib import Path
 from paragraph.build import build_from_json
-from paragraph.cluster import cluster, cohesion_score, score_all
+from paragraph.cluster import cluster, cohesion_score, score_all, community_label, label_communities
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -74,3 +74,58 @@ def test_cluster_does_not_write_to_stderr(capsys):
     # Allow logging output (starts with [paragraph]) but no raw ANSI codes
     for line in captured.err.splitlines():
         assert "\x1b" not in line, f"cluster() wrote ANSI to stderr: {line!r}"
+
+
+def test_label_communities_covers_all_communities():
+    G = make_graph()
+    communities = cluster(G)
+    labels = label_communities(G, communities)
+    assert set(labels.keys()) == set(communities.keys())
+    assert all(isinstance(l, str) and l for l in labels.values())
+
+
+def test_label_communities_deterministic():
+    """Same graph, same communities -> byte-identical labels every time."""
+    G = make_graph()
+    communities = cluster(G)
+    assert label_communities(G, communities) == label_communities(G, communities)
+
+
+def test_community_label_ranks_by_within_community_degree():
+    G = nx.Graph()
+    G.add_node("a", label="Auth")
+    G.add_node("b", label="Session")
+    G.add_node("c", label="Token")
+    G.add_node("d", label="Cookie")
+    G.add_edges_from([("a", "b"), ("a", "c"), ("a", "d"), ("b", "c")])
+    label = community_label(G, ["a", "b", "c", "d"])
+    # a has degree 3, b and c have degree 2, d has degree 1
+    assert label.startswith("Auth · ")
+    assert label == "Auth · Session · Token"
+
+
+def test_community_label_tie_break_by_node_id():
+    """Equal degrees fall back to node id ordering, keeping labels stable."""
+    G = nx.Graph()
+    G.add_node("n2", label="Beta")
+    G.add_node("n1", label="Alpha")
+    G.add_edge("n1", "n2")
+    assert community_label(G, ["n2", "n1"]) == "Alpha · Beta"
+
+
+def test_community_label_truncates_long_labels():
+    G = nx.Graph()
+    G.add_node("a", label="A" * 80)
+    G.add_node("b", label="B" * 80)
+    G.add_edge("a", "b")
+    label = community_label(G, ["a", "b"])
+    assert len(label) <= 50
+    assert label.endswith("…")
+
+
+def test_cluster_stores_labels_on_graph_metadata():
+    """cluster() persists deterministic labels on G.graph, same convention as hyperedges."""
+    G = make_graph()
+    communities = cluster(G)
+    stored = G.graph.get("community_labels")
+    assert stored == label_communities(G, communities)

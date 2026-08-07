@@ -1,4 +1,4 @@
-"""graphify CLI - `paragraph install` sets up the Claude Code skill."""
+"""paragraph CLI - `paragraph install` sets up the Claude Code skill."""
 from __future__ import annotations
 import json
 import re
@@ -20,7 +20,7 @@ def _check_skill_version(skill_dst: Path) -> None:
         return
     installed = version_file.read_text(encoding="utf-8").strip()
     if installed != __version__:
-        print(f"  warning: skill is from graphify {installed}, package is {__version__}. Run 'paragraph install' to update.")
+        print(f"  warning: skill is from paragraph {installed}, package is {__version__}. Run 'paragraph install' to update.")
 
 
 def _refresh_all_version_stamps() -> None:
@@ -66,7 +66,7 @@ def install() -> None:
     cfg = _PLATFORM_CONFIG["claude"]
     skill_src = Path(__file__).parent / cfg["skill_file"]
     if not skill_src.exists():
-        print(f"error: {cfg['skill_file']} not found in package - reinstall graphify", file=sys.stderr)
+        print(f"error: {cfg['skill_file']} not found in package - reinstall paragraph", file=sys.stderr)
         sys.exit(1)
 
     import os as _os
@@ -269,7 +269,7 @@ def main() -> None:
         _check_skill_version(Path.home() / _PLATFORM_CONFIG["claude"]["skill_dst"])
 
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
-        print("Usage: graphify <command>")
+        print("Usage: paragraph <command>")
         print()
         print("Commands:")
         print("  install                 copy skill to ~/.claude/skills/paragraph/ and register in CLAUDE.md")
@@ -290,11 +290,22 @@ def main() -> None:
         print("    --dir <path>            target directory (default: ./raw)")
         print("  watch <path>            watch a folder and rebuild the graph on code changes")
         print("  update <path>           re-extract code files and update the graph (no LLM needed)")
+        print("  ingest-claude-mem <path> inject claude-mem observations into the graph (idempotent)")
+        print("    --db <path>             claude-mem SQLite DB (default ~/.claude-mem/claude-mem.db)")
+        print("    --graph <path>          path to graph.json (default <path>/graphify-out/graph.json)")
+        print("    --project <name>        claude-mem project name (default: basename of <path>)")
         print("  cluster-only <path>     rerun clustering on an existing graph.json and regenerate report")
         print("  query \"<question>\"       BFS traversal of graph.json for a question")
         print("    --dfs                   use depth-first instead of breadth-first")
         print("    --budget N              cap output at N tokens (default 2000)")
         print("    --graph <path>          path to graph.json (default graphify-out/graph.json)")
+        print("  retrieve \"<question>\"    diversity-aware embedding retrieval (the evaluated read path)")
+        print("    --top-k N               ranked results to keep (default 10)")
+        print("    --budget N              token budget for packed chunks (default 8000)")
+        print("    --json                  output JSON with chunks + provenance")
+        print("    --graph <path>          path to graph.json (default graphify-out/graph.json)")
+        print("    --vectors <path>        path to vectors.db (default: next to graph.json)")
+        print("    --eval <eval.json>      run the labeled retrieval eval instead of a single query")
         print("  save-result             save a Q&A result to graphify-out/memory/ for graph feedback loop")
         print("    --question Q            the question asked")
         print("    --answer A              the answer to save")
@@ -319,7 +330,7 @@ def main() -> None:
         elif subcmd == "uninstall":
             claude_uninstall()
         else:
-            print("Usage: graphify claude [install|uninstall]", file=sys.stderr)
+            print("Usage: paragraph claude [install|uninstall]", file=sys.stderr)
             sys.exit(1)
     elif cmd == "hook":
         from paragraph.hooks import install as hook_install, uninstall as hook_uninstall, status as hook_status
@@ -391,6 +402,9 @@ def main() -> None:
         start = [nid for _, nid in scored[:5]]
         nodes, edges = (_dfs if use_dfs else _bfs)(G, start, depth=2)
         print(_subgraph_to_text(G, nodes, edges, token_budget=budget))
+    elif cmd == "retrieve":
+        from paragraph.retrieve import main as _retrieve_main
+        sys.exit(_retrieve_main(sys.argv[2:]))
     elif cmd == "save-result":
         # paragraph save-result --question Q --answer A --type T [--nodes N1 N2 ...]
         import argparse as _ap
@@ -591,6 +605,31 @@ def main() -> None:
             print("Nothing to update or rebuild failed — check output above.", file=sys.stderr)
             sys.exit(1)
 
+    elif cmd == "ingest-claude-mem":
+        if len(sys.argv) < 3:
+            print("Usage: paragraph ingest-claude-mem <project-path> [--db path] [--graph path] [--project name]", file=sys.stderr)
+            sys.exit(1)
+        project_path = Path(sys.argv[2])
+        if not project_path.exists():
+            print(f"error: path not found: {project_path}", file=sys.stderr)
+            sys.exit(1)
+        db_path: Path | None = None
+        cm_graph_path: Path | None = None
+        cm_project: str | None = None
+        args = sys.argv[3:]
+        i = 0
+        while i < len(args):
+            if args[i] == "--db" and i + 1 < len(args):
+                db_path = Path(args[i + 1]); i += 2
+            elif args[i] == "--graph" and i + 1 < len(args):
+                cm_graph_path = Path(args[i + 1]); i += 2
+            elif args[i] == "--project" and i + 1 < len(args):
+                cm_project = args[i + 1]; i += 2
+            else:
+                i += 1
+        from paragraph.ingest_claudemem import run as _run_claudemem
+        sys.exit(_run_claudemem(project_path, db_path=db_path, graph_path=cm_graph_path, project=cm_project))
+
     elif cmd == "check-update":
         if len(sys.argv) < 3:
             print("Usage: paragraph check-update <path>", file=sys.stderr)
@@ -674,7 +713,7 @@ def main() -> None:
         print_benchmark(result)
     else:
         print(f"error: unknown command '{cmd}'", file=sys.stderr)
-        print("Run 'graphify --help' for usage.", file=sys.stderr)
+        print("Run 'paragraph --help' for usage.", file=sys.stderr)
         sys.exit(1)
 
 

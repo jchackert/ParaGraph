@@ -1,8 +1,117 @@
 # generate GRAPH_REPORT.md - the human-readable audit trail
 from __future__ import annotations
+import json
 import re
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 import networkx as nx
+
+_BARE_LABEL = re.compile(r"^Community \d+$")
+
+
+def _auto_labels(G: nx.Graph, communities: dict[int, list[str]]) -> dict[int, str]:
+    """Deterministic member-based labels for communities.
+
+    Prefers the labels cluster() stored on G.graph["community_labels"]
+    (graph.json round-trips them with string keys - normalize back to int).
+    Falls back to computing them fresh, so graphs loaded from JSON built by
+    older versions still get labels.
+    """
+    stored = G.graph.get("community_labels")
+    if isinstance(stored, dict) and stored:
+        out: dict[int, str] = {}
+        for k, v in stored.items():
+            try:
+                out[int(k)] = str(v)
+            except (TypeError, ValueError):
+                continue
+        if out:
+            return out
+    from .cluster import label_communities
+    return label_communities(G, communities)
+
+
+def _resolve_labels(
+    G: nx.Graph,
+    communities: dict[int, list[str]],
+    community_labels: dict[int, str],
+) -> tuple[dict[int, str], dict[int, str]]:
+    """Return (pretty, display) label dicts for every community.
+
+    Caller-provided labels win when they are real names (e.g. LLM-generated).
+    Bare "Community {N}" defaults are upgraded to the deterministic
+    member-based label. `pretty` is the name alone (for headings that already
+    show the id); `display` keeps the numeric id visible for stable reference:
+    "Community 12 — SubscriptionService · CaptureViewModel".
+    """
+    auto = _auto_labels(G, communities)
+    pretty: dict[int, str] = {}
+    display: dict[int, str] = {}
+    for cid in communities:
+        provided = community_labels.get(cid, f"Community {cid}")
+        if provided and not _BARE_LABEL.match(provided):
+            p = provided
+        else:
+            a = auto.get(cid, "")
+            p = a if a and not _BARE_LABEL.match(a) else (provided or f"Community {cid}")
+        pretty[cid] = p
+        display[cid] = p if p == provided else f"Community {cid} — {p}"
+    return pretty, display
+
+
+def _freshness_lines(root: str, out_dir: str | Path | None = None) -> list[str]:
+    """Render the Extraction Freshness section.
+
+    The only durable record of the last full semantic (LLM) extraction is
+    graphify-out/manifest.json - it is written solely by full runs and
+    --update runs (skill.md step 9), never by code-only watch rebuilds. Its
+    mtime is therefore an honest "last full semantic extraction" timestamp.
+    Never fabricates: with no manifest we say so explicitly.
+    """
+    lines = ["", "## Extraction Freshness"]
+    out = Path(out_dir) if out_dir else None
+    if out is None:
+        candidate = Path(root) / "graphify-out"
+        if candidate.is_dir():
+            out = candidate
+        elif Path("graphify-out").is_dir():
+            out = Path("graphify-out")
+    manifest_path = (out / "manifest.json") if out is not None else None
+    if manifest_path is None or not manifest_path.is_file():
+        lines.append("- Last full semantic extraction: unknown — no record")
+        return lines
+
+    when = datetime.fromtimestamp(manifest_path.stat().st_mtime).date().isoformat()
+    lines.append(f"- Last full semantic extraction: {when} (manifest.json last written)")
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        manifest = {}
+    if isinstance(manifest, dict) and manifest:
+        base = out.parent
+        modified = deleted = 0
+        for f, stored_mtime in manifest.items():
+            p = Path(f)
+            if not p.is_absolute():
+                p = base / f
+            try:
+                current = p.stat().st_mtime
+            except OSError:
+                deleted += 1
+                continue
+            if isinstance(stored_mtime, (int, float)) and current > stored_mtime + 1e-6:
+                modified += 1
+        lines.append(
+            f"- Source files changed since: {modified} modified · {deleted} deleted"
+            f" (of {len(manifest)} tracked; files added since are not in the manifest)"
+        )
+    if (out / "needs_update").exists():
+        lines.append(
+            "- needs_update flag is set — semantic re-extraction pending"
+            " (run `/paragraph --update`)"
+        )
+    return lines
 
 
 def _safe_community_name(label: str) -> str:
@@ -23,6 +132,7 @@ def generate(
     token_cost: dict,
     root: str,
     suggested_questions: list[dict] | None = None,
+    out_dir: str | Path | None = None,
 ) -> str:
     today = date.today().isoformat()
 
@@ -49,9 +159,13 @@ def generate(
             "- Verdict: corpus is large enough that graph structure adds value.",
         ]
 
+    lines += _freshness_lines(root, out_dir)
+
     from .analyze import _is_file_node as _ifn
     non_empty = {cid: nodes for cid, nodes in communities.items()
                  if any(not _ifn(G, n) for n in nodes)}
+
+    pretty_labels, display_labels = _resolve_labels(G, communities, community_labels)
 
     lines += [
         "",
@@ -67,9 +181,11 @@ def generate(
     if non_empty:
         lines += ["", "## Community Hubs (Navigation)"]
         for cid in non_empty:
+            # Hub filenames are derived from the caller-provided labels in
+            # export - keep the link target on those, prettify only the alias.
             label = community_labels.get(cid, f"Community {cid}")
             safe = _safe_community_name(label)
-            lines.append(f"- [[_COMMUNITY_{safe}|{label}]]")
+            lines.append(f"- [[_COMMUNITY_{safe}|{display_labels.get(cid, label)}]]")
 
     lines += [
         "",
@@ -110,7 +226,7 @@ def generate(
 
     lines += ["", "## Communities"]
     for cid, nodes in communities.items():
-        label = community_labels.get(cid, f"Community {cid}")
+        label = pretty_labels.get(cid, f"Community {cid}")
         score = cohesion_scores.get(cid, 0.0)
         # Filter method/function stubs from display - they're structural noise
         real_nodes = [n for n in nodes if not _ifn(G, n)]
@@ -158,7 +274,7 @@ def generate(
             lines.append("  These have ≤1 connection - possible missing edges or undocumented components.")
         if thin_communities:
             for cid, nodes in thin_communities.items():
-                label = community_labels.get(cid, f"Community {cid}")
+                label = display_labels.get(cid, f"Community {cid}")
                 node_labels = [G.nodes[n].get("label", n) for n in nodes]
                 lines.append(f"- **Thin community `{label}`** ({len(nodes)} nodes): {', '.join(f'`{l}`' for l in node_labels)}")
                 lines.append("  Too small to be a meaningful cluster - may be noise or needs more connections extracted.")

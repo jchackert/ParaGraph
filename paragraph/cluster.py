@@ -66,12 +66,15 @@ def cluster(G: nx.Graph) -> dict[int, list[str]]:
     Accepts directed or undirected graphs. DiGraphs are converted to undirected
     internally since Louvain/Leiden require undirected input.
     """
+    orig = G  # keep the caller's graph so metadata lands on it, not on copies
     if G.number_of_nodes() == 0:
         return {}
     if G.is_directed():
         G = G.to_undirected()
     if G.number_of_edges() == 0:
-        return {i: [n] for i, n in enumerate(sorted(G.nodes))}
+        result = {i: [n] for i, n in enumerate(sorted(G.nodes))}
+        orig.graph["community_labels"] = label_communities(orig, result)
+        return result
 
     # Leiden warns and drops isolates - handle them separately
     isolates = [n for n in G.nodes() if G.degree(n) == 0]
@@ -101,7 +104,12 @@ def cluster(G: nx.Graph) -> dict[int, list[str]]:
 
     # Re-index by size descending for deterministic ordering
     final_communities.sort(key=len, reverse=True)
-    return {i: sorted(nodes) for i, nodes in enumerate(final_communities)}
+    result = {i: sorted(nodes) for i, nodes in enumerate(final_communities)}
+    # Store deterministic labels as graph-level metadata (same convention as
+    # "hyperedges") so they persist into graph.json and downstream consumers
+    # (report, export) can use them without a new pipeline parameter.
+    orig.graph["community_labels"] = label_communities(orig, result)
+    return result
 
 
 def _split_community(G: nx.Graph, nodes: list[str]) -> list[list[str]]:
@@ -120,6 +128,53 @@ def _split_community(G: nx.Graph, nodes: list[str]) -> list[list[str]]:
         return [sorted(v) for v in sub_communities.values()]
     except Exception:
         return [sorted(nodes)]
+
+
+_LABEL_MAX_MEMBERS = 3
+_LABEL_MAX_LEN = 50
+_LABEL_SEPARATOR = " · "
+
+
+def community_label(G: nx.Graph, nodes: list[str]) -> str:
+    """Deterministic human-readable label for one community. No LLM calls.
+
+    Joins the labels of the top members ranked by within-community degree
+    (ties broken by node id, so the label is stable across runs on the same
+    graph) with " · ", capped at _LABEL_MAX_LEN characters. AST file-hub and
+    method-stub nodes are skipped when the community has real nodes, matching
+    what the report displays.
+    """
+    from .analyze import _is_file_node  # local import - analyze imports are heavier
+
+    sub = G.subgraph(nodes)
+    real = [n for n in nodes if not _is_file_node(G, n)]
+    ranked = sorted(real or list(nodes), key=lambda n: (-sub.degree(n), str(n)))
+    parts: list[str] = []
+    for n in ranked:
+        raw = str(G.nodes[n].get("label", n)).strip()
+        if not raw or raw in parts:
+            continue
+        if parts and len(_LABEL_SEPARATOR.join([*parts, raw])) > _LABEL_MAX_LEN:
+            break
+        parts.append(raw)
+        if len(parts) >= _LABEL_MAX_MEMBERS:
+            break
+    label = _LABEL_SEPARATOR.join(parts)
+    if len(label) > _LABEL_MAX_LEN:
+        label = label[: _LABEL_MAX_LEN - 1].rstrip() + "…"
+    return label
+
+
+def label_communities(G: nx.Graph, communities: dict[int, list[str]]) -> dict[int, str]:
+    """Deterministic labels for all communities: {community_id: label}.
+
+    Falls back to "Community {cid}" when a community yields no usable member
+    labels (e.g. all labels empty).
+    """
+    return {
+        cid: (community_label(G, nodes) or f"Community {cid}")
+        for cid, nodes in communities.items()
+    }
 
 
 def cohesion_score(G: nx.Graph, community_nodes: list[str]) -> float:
