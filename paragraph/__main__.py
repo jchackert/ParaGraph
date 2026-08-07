@@ -45,11 +45,11 @@ _SETTINGS_HOOK = {
 }
 
 _SKILL_REGISTRATION = (
-    "\n# graphify\n"
-    "- **graphify** (`~/.claude/skills/paragraph/SKILL.md`) "
+    "\n# paragraph\n"
+    "- **paragraph** (`~/.claude/skills/paragraph/SKILL.md`) "
     "- any input to knowledge graph. Trigger: `/paragraph`\n"
     "When the user types `/paragraph`, invoke the Skill tool "
-    "with `skill: \"graphify\"` before doing anything else.\n"
+    "with `skill: \"paragraph\"` before doing anything else.\n"
 )
 
 

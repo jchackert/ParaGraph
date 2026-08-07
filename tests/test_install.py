@@ -70,7 +70,7 @@ def test_install_registration_idempotent(tmp_path):
     _install(tmp_path)
     _install(tmp_path)
     content = (tmp_path / ".claude" / "CLAUDE.md").read_text()
-    assert content.count("# graphify") == 1
+    assert content.count("# paragraph") == 1
 
 
 def test_install_skill_copy_idempotent(tmp_path):
