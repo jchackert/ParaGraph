@@ -27,6 +27,13 @@ def test_not_a_dict():
     errors = validate_extraction([])
     assert len(errors) == 1
 
+def test_observation_file_type_accepted():
+    data = {
+        "nodes": [{"id": "claudemem_1", "label": "Obs", "file_type": "observation", "source_file": None}],
+        "edges": [],
+    }
+    assert validate_extraction(data) == []
+
 def test_invalid_file_type():
     data = {
         "nodes": [{"id": "n1", "label": "X", "file_type": "video", "source_file": "x.mp4"}],
