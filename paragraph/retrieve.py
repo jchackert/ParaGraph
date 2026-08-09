@@ -108,20 +108,59 @@ class RetrievalResult:
     chunks: list[Chunk] = field(default_factory=list)
     provenance: list[dict] = field(default_factory=list)
     query_metadata: dict = field(default_factory=dict)
+    # Set only when retrieval could not run at all (embedding backend
+    # unreachable). Distinct from an empty `chunks` list, which means retrieval
+    # ran and the corpus genuinely had nothing above threshold. Consumers that
+    # catch RetrievalUnavailable rather than letting it propagate should
+    # populate this so the distinction survives into their output.
+    retrieval_failed: str | None = None
+
+
+class RetrievalUnavailable(RuntimeError):
+    """The embedding backend could not be reached, so retrieval never ran.
+
+    This exists because the previous behaviour — returning an empty
+    RetrievalResult when ollama was down — was indistinguishable from "the
+    graph has nothing relevant for this query". Agents are instructed to run
+    graph retrieval before architecture work and report whether the graph
+    answered; under the old behaviour an outage was silently laundered into a
+    finding about corpus coverage. An unreachable backend is an infrastructure
+    failure and must be loud.
+    """
 
 
 # ---------------------------------------------------------------------------
 # Embedding
 # ---------------------------------------------------------------------------
-def get_embedding(text: str) -> list[float] | None:
+def get_embedding(text: str) -> list[float]:
+    """Embed `text` via the local ollama backend.
+
+    Raises RetrievalUnavailable if the backend is unreachable, times out, or
+    returns a payload without a usable embedding (e.g. the model is not
+    pulled, which comes back as a JSON error body rather than a transport
+    error). Never returns None or an empty vector — callers may assume a
+    successful return is usable.
+    """
     payload = json.dumps({"model": EMBED_MODEL, "prompt": text[:1500]}).encode()
     req = urllib.request.Request(OLLAMA_URL, data=payload, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read()).get("embedding")
+            body = json.loads(resp.read())
     except Exception as e:
-        print(f"Embed error: {e}", file=sys.stderr)
-        return None
+        raise RetrievalUnavailable(
+            f"embedding backend unreachable at {OLLAMA_URL} (model {EMBED_MODEL}): {e}"
+        ) from e
+
+    embedding = body.get("embedding")
+    if not embedding:
+        # A 200 with no embedding is how ollama reports a missing model and
+        # similar request-level errors. Treating it as "no results" is the
+        # same fail-open as a transport error.
+        detail = body.get("error") or f"no 'embedding' field in response: {sorted(body)[:5]}"
+        raise RetrievalUnavailable(
+            f"embedding backend returned no vector for model {EMBED_MODEL}: {detail}"
+        )
+    return embedding
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -395,10 +434,14 @@ def retrieve(
     budget_tokens: int = DEFAULT_BUDGET_TOKENS,
     top_k: int = 10,
 ) -> RetrievalResult:
-    """Full retrieval pipeline."""
+    """Full retrieval pipeline.
+
+    Raises RetrievalUnavailable if the embedding backend is unreachable. This
+    propagates deliberately rather than degrading to an empty result: a caller
+    that cannot tell "retrieval failed" from "nothing matched" will report the
+    latter, which is how an outage becomes a false statement about the corpus.
+    """
     query_emb = get_embedding(seed)
-    if not query_emb:
-        return RetrievalResult(query=seed)
 
     # Step 1: Vector retrieval
     candidates = vector_retrieve(conn, query_emb, VECTOR_TOP_N)
@@ -534,6 +577,11 @@ def format_json(result: RetrievalResult) -> str:
         "provenance": result.provenance,
         "query_metadata": result.query_metadata,
     }
+    # Only present when retrieval could not run. A consumer seeing zero chunks
+    # must check this field before concluding the corpus had nothing — that
+    # conflation is the bug this field exists to prevent.
+    if result.retrieval_failed:
+        out["retrieval_failed"] = result.retrieval_failed
     return json.dumps(out, indent=2)
 
 
@@ -598,14 +646,36 @@ def main(argv: list[str] | None = None) -> int:
             if not eval_path.exists():
                 print(f"error: eval file not found: {eval_path}", file=sys.stderr)
                 return 1
-            run_eval(eval_path, conn, gidx)
+            try:
+                run_eval(eval_path, conn, gidx)
+            except RetrievalUnavailable as e:
+                # Do not score the remaining queries as misses. A backend that
+                # dies mid-eval would otherwise produce a plausible-looking
+                # degraded score with no indication the run was invalid.
+                print(f"error: retrieval unavailable, eval aborted: {e}", file=sys.stderr)
+                return 2
             return 0
 
         if not args.query:
             print('Usage: paragraph retrieve "<query>" | --eval <eval.json>', file=sys.stderr)
             return 1
 
-        result = retrieve(args.query, conn, gidx, budget_tokens=args.budget, top_k=args.top_k)
+        try:
+            result = retrieve(args.query, conn, gidx, budget_tokens=args.budget, top_k=args.top_k)
+        except RetrievalUnavailable as e:
+            # Exit 2, distinct from 1 (bad arguments / missing files), so a
+            # caller can tell "retrieval could not run" from "you asked wrong"
+            # and from "retrieval ran and found nothing" (exit 0, no chunks).
+            print(f"error: retrieval could not run: {e}", file=sys.stderr)
+            print(
+                "This is an infrastructure failure, NOT a statement about the corpus. "
+                "Do not report it as 'the graph had no answer'. "
+                f"Check that ollama is running and the {EMBED_MODEL} model is pulled.",
+                file=sys.stderr,
+            )
+            if args.json:
+                print(format_json(RetrievalResult(query=args.query, retrieval_failed=str(e))))
+            return 2
 
         if args.json:
             print(format_json(result))
