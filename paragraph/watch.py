@@ -13,9 +13,9 @@ _CODE_EXTENSIONS = CODE_EXTENSIONS
 
 
 def _report_root_label(watch_path: Path) -> str:
-    if watch_path.is_absolute():
-        return watch_path.name or str(watch_path)
-    return Path.cwd().name if watch_path == Path(".") else str(watch_path)
+    """Delegates to report.root_label so every writer of GRAPH_REPORT.md agrees."""
+    from paragraph.report import root_label
+    return root_label(watch_path)
 
 
 def _relativize_source_files(payload: dict, root: Path) -> None:

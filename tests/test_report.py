@@ -268,3 +268,34 @@ def test_generate_picks_up_marker_without_env(tmp_path, monkeypatch):
                       tokens, str(tmp_path), out_dir=out)
     assert "62,400 words" not in report
     assert "GRAPH_FRESHNESS.md" in report
+
+
+# --- root_label: the H1 must not depend on which command wrote the report -----
+
+def test_root_label_dot_resolves_to_cwd_name(tmp_path, monkeypatch):
+    from paragraph.report import root_label
+    from pathlib import Path
+    monkeypatch.chdir(tmp_path)
+    assert root_label(Path(".")) == tmp_path.name
+    assert root_label(".") == tmp_path.name
+
+
+def test_root_label_absolute_uses_dir_name(tmp_path):
+    from paragraph.report import root_label
+    assert root_label(tmp_path) == tmp_path.name
+
+
+def test_both_report_writers_agree_on_the_label(tmp_path, monkeypatch):
+    """watch.py's helper and the cluster-only path must produce the same string.
+
+    Regression guard: cluster-only passed the raw path, so the same corpus was
+    titled "PARA_Note" by `paragraph update` and "." by `paragraph cluster-only`,
+    flipping the committed report's H1 with the invocation path.
+    """
+    from paragraph.report import root_label
+    from paragraph.watch import _report_root_label
+    from pathlib import Path
+    monkeypatch.chdir(tmp_path)
+    for candidate in (Path("."), tmp_path, Path("sub/dir")):
+        assert _report_root_label(candidate) == root_label(candidate)
+    assert root_label(Path(".")) != "."

@@ -15,6 +15,24 @@ STABLE_MARKER_FILENAME = ".stable_report"
 _TRUTHY = {"1", "true", "True", "yes", "on"}
 
 
+def root_label(path: Path | str) -> str:
+    """Human-readable corpus name for a report heading.
+
+    Every code path that writes GRAPH_REPORT.md must use this, so the H1 does not
+    depend on which command happened to write the file last. `paragraph update`
+    and `paragraph cluster-only` both rewrite the report; before this was shared,
+    the former produced "# Graph Report - PARA_Note" and the latter
+    "# Graph Report - ." for the same corpus, so the heading flipped back and
+    forth purely with the invocation path. For a consumer that commits the
+    report, that is a spurious diff — the same class of churn stable mode exists
+    to remove (see `stable_mode_default`).
+    """
+    p = Path(path)
+    if p.is_absolute():
+        return p.name or str(p)
+    return Path.cwd().name if p == Path(".") else str(p)
+
+
 def _resolve_out_dir(root: str | None, out_dir: str | Path | None) -> Path | None:
     """Locate the graphify-out directory, preferring an explicit path."""
     if out_dir:

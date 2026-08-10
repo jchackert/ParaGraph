@@ -580,7 +580,7 @@ def main() -> None:
         from paragraph.build import build_from_json
         from paragraph.cluster import cluster, score_all
         from paragraph.analyze import god_nodes, surprising_connections, suggest_questions
-        from paragraph.report import (generate, freshness_report,
+        from paragraph.report import (generate, freshness_report, root_label,
                                       stable_mode_default, FRESHNESS_FILENAME)
         from paragraph.export import to_json, to_html
         print("Loading existing graph...")
@@ -597,14 +597,14 @@ def main() -> None:
         tokens = {"input": 0, "output": 0}
         report = generate(G, communities, cohesion, labels, gods, surprises,
                           {"warning": "cluster-only mode — file stats not available"},
-                          tokens, str(watch_path), suggested_questions=questions)
+                          tokens, root_label(watch_path), suggested_questions=questions)
         out = watch_path / "graphify-out"
         (out / "GRAPH_REPORT.md").write_text(report, encoding="utf-8")
         if stable_mode_default(out, str(watch_path)):
             (out / FRESHNESS_FILENAME).write_text(
                 freshness_report(
                     {"warning": "cluster-only mode — file stats not available"},
-                    str(watch_path), out_dir=out),
+                    root_label(watch_path), out_dir=out),
                 encoding="utf-8")
         to_json(G, communities, str(out / "graph.json"))
         to_html(G, communities, str(out / "graph.html"), community_labels=labels or None)
