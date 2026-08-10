@@ -47,7 +47,8 @@ def _rebuild_code(watch_path: Path, *, follow_symlinks: bool = False) -> bool:
         from paragraph.build import build_from_json
         from paragraph.cluster import cluster, score_all
         from paragraph.analyze import god_nodes, surprising_connections, suggest_questions
-        from paragraph.report import generate
+        from paragraph.report import (generate, freshness_report,
+                                      stable_mode_default, FRESHNESS_FILENAME)
         from paragraph.export import to_json, to_html
 
         detected = detect(watch_path, follow_symlinks=follow_symlinks)
@@ -103,6 +104,9 @@ def _rebuild_code(watch_path: Path, *, follow_symlinks: bool = False) -> bool:
                           {"input": 0, "output": 0}, report_root, suggested_questions=questions,
                           out_dir=out)
         (out / "GRAPH_REPORT.md").write_text(report, encoding="utf-8")
+        if stable_mode_default():
+            (out / FRESHNESS_FILENAME).write_text(
+                freshness_report(detection, report_root, out_dir=out), encoding="utf-8")
         # force=True: code-only rebuilds preserve semantic nodes internally
         # (lines 62-82) but produce fewer total nodes than the enriched graph
         # due to code-node ID churn from AST re-extraction. The safety check

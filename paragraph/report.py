@@ -1,12 +1,33 @@
 # generate GRAPH_REPORT.md - the human-readable audit trail
 from __future__ import annotations
 import json
+import os
 import re
 from datetime import date, datetime
 from pathlib import Path
 import networkx as nx
 
 _BARE_LABEL = re.compile(r"^Community \d+$")
+
+FRESHNESS_FILENAME = "GRAPH_FRESHNESS.md"
+
+_TRUTHY = {"1", "true", "True", "yes", "on"}
+
+
+def stable_mode_default() -> bool:
+    """Whether to omit wall-clock-varying fields from GRAPH_REPORT.md.
+
+    Off by default. Set PARAGRAPH_STABLE_REPORT=1 to turn it on.
+
+    Why this exists: the report's generation date, corpus file/word counts, and
+    "source files changed since" counters move on every run whether or not the
+    graph changed. For a consumer that commits GRAPH_REPORT.md to git, that means
+    a rebuild can never produce a no-op diff, so "the file is dirty" stops meaning
+    "something happened" and the signal is lost. In stable mode those fields move
+    to a sidecar (see `freshness_report`) which the consumer can gitignore; they
+    are relocated, never dropped.
+    """
+    return os.environ.get("PARAGRAPH_STABLE_REPORT", "") in _TRUTHY
 
 
 def _auto_labels(G: nx.Graph, communities: dict[int, list[str]]) -> dict[int, str]:
@@ -114,6 +135,38 @@ def _freshness_lines(root: str, out_dir: str | Path | None = None) -> list[str]:
     return lines
 
 
+def freshness_report(
+    detection_result: dict,
+    root: str,
+    out_dir: str | Path | None = None,
+) -> str:
+    """The wall-clock-varying half of the report, as a standalone sidecar document.
+
+    Holds exactly what stable mode removes from GRAPH_REPORT.md: generation date,
+    corpus file/word counts, and extraction-freshness counters. Callers write this
+    to `FRESHNESS_FILENAME` so the information stays available (it is the "is my
+    graph stale" signal) without making the committed report churn.
+    """
+    lines = [
+        f"# Graph Freshness - {root}  ({date.today().isoformat()})",
+        "",
+        "> Regenerated every run; these values track wall-clock state, not graph",
+        "> structure. Kept out of GRAPH_REPORT.md so that report only changes when",
+        "> the graph does.",
+        "",
+        "## Corpus Check",
+    ]
+    if detection_result.get("warning"):
+        lines.append(f"- {detection_result['warning']}")
+    else:
+        lines.append(
+            f"- {detection_result['total_files']} files"
+            f" · ~{detection_result['total_words']:,} words"
+        )
+    lines += _freshness_lines(root, out_dir)
+    return "\n".join(lines) + "\n"
+
+
 def _safe_community_name(label: str) -> str:
     """Mirrors export.safe_name so community hub filenames and report wikilinks always agree."""
     cleaned = re.sub(r'[\\/*?:"<>|#^[\]]', "", label.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")).strip()
@@ -133,7 +186,17 @@ def generate(
     root: str,
     suggested_questions: list[dict] | None = None,
     out_dir: str | Path | None = None,
+    stable: bool | None = None,
 ) -> str:
+    """Render GRAPH_REPORT.md.
+
+    `stable` omits every wall-clock-varying field so the output changes only when
+    the graph does; the omitted values move to the `freshness_report` sidecar.
+    None (the default) defers to PARAGRAPH_STABLE_REPORT, which is off unless set,
+    so existing callers keep their current output byte for byte.
+    """
+    if stable is None:
+        stable = stable_mode_default()
     today = date.today().isoformat()
 
     confidences = [d.get("confidence", "EXTRACTED") for _, _, d in G.edges(data=True)]
@@ -147,19 +210,25 @@ def generate(
     inf_avg = round(sum(inf_scores) / len(inf_scores), 2) if inf_scores else None
 
     lines = [
-        f"# Graph Report - {root}  ({today})",
+        f"# Graph Report - {root}" if stable else f"# Graph Report - {root}  ({today})",
         "",
         "## Corpus Check",
     ]
     if detection_result.get("warning"):
         lines.append(f"- {detection_result['warning']}")
+    elif stable:
+        # File and word counts drift on every run; they live in the sidecar now.
+        lines.append("- Verdict: corpus is large enough that graph structure adds value.")
     else:
         lines += [
             f"- {detection_result['total_files']} files · ~{detection_result['total_words']:,} words",
             "- Verdict: corpus is large enough that graph structure adds value.",
         ]
 
-    lines += _freshness_lines(root, out_dir)
+    if stable:
+        lines += ["", f"- Corpus and extraction-freshness stats: see `{FRESHNESS_FILENAME}`."]
+    else:
+        lines += _freshness_lines(root, out_dir)
 
     from .analyze import _is_file_node as _ifn
     non_empty = {cid: nodes for cid, nodes in communities.items()

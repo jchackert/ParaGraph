@@ -137,3 +137,69 @@ def test_report_freshness_needs_update_flag(tmp_path):
     report = generate(G, communities, cohesion, labels, gods, surprises, detection, tokens,
                       "./project", out_dir=out)
     assert "needs_update flag is set" in report
+
+
+# --- stable mode (PARAGRAPH_STABLE_REPORT) -----------------------------------
+# Stable mode omits every wall-clock-varying field from GRAPH_REPORT.md so a
+# consumer that commits the file only sees a diff when the graph itself changed.
+# The omitted values move to the freshness sidecar, never dropped.
+
+def _stable_report():
+    G, communities, cohesion, labels, gods, surprises, detection, tokens = make_inputs()
+    return generate(G, communities, cohesion, labels, gods, surprises, detection,
+                    tokens, "./project", stable=True)
+
+
+def test_stable_report_omits_generation_date():
+    from datetime import date
+    report = _stable_report()
+    assert "# Graph Report" in report
+    assert date.today().isoformat() not in report.split("\n")[0]
+
+
+def test_stable_report_omits_volatile_corpus_counts():
+    report = _stable_report()
+    assert "## Corpus Check" in report          # section kept
+    assert "62,400 words" not in report         # the drifting number is gone
+    assert "Verdict:" in report                 # the stable judgement stays
+
+
+def test_stable_report_omits_freshness_counters():
+    report = _stable_report()
+    assert "Source files changed since" not in report
+    assert "GRAPH_FRESHNESS.md" in report       # points at where they went
+
+
+def test_stable_report_keeps_structural_sections():
+    report = _stable_report()
+    for section in ("## God Nodes", "## Surprising Connections", "## Communities"):
+        assert section in report
+
+
+def test_stable_report_is_byte_identical_across_calls():
+    assert _stable_report() == _stable_report()
+
+
+def test_default_is_unchanged_when_env_unset(monkeypatch):
+    monkeypatch.delenv("PARAGRAPH_STABLE_REPORT", raising=False)
+    G, communities, cohesion, labels, gods, surprises, detection, tokens = make_inputs()
+    report = generate(G, communities, cohesion, labels, gods, surprises, detection,
+                      tokens, "./project")
+    assert "62,400 words" in report             # volatile fields still present
+
+
+def test_env_var_enables_stable_mode(monkeypatch):
+    monkeypatch.setenv("PARAGRAPH_STABLE_REPORT", "1")
+    G, communities, cohesion, labels, gods, surprises, detection, tokens = make_inputs()
+    report = generate(G, communities, cohesion, labels, gods, surprises, detection,
+                      tokens, "./project")
+    assert "62,400 words" not in report
+
+
+def test_freshness_sidecar_carries_the_volatile_values():
+    from paragraph.report import freshness_report
+    _, _, _, _, _, _, detection, _ = make_inputs()
+    side = freshness_report(detection, "./project")
+    assert "62,400 words" in side
+    assert "## Corpus Check" in side
+    assert "## Extraction Freshness" in side
