@@ -600,7 +600,7 @@ def main() -> None:
                           tokens, str(watch_path), suggested_questions=questions)
         out = watch_path / "graphify-out"
         (out / "GRAPH_REPORT.md").write_text(report, encoding="utf-8")
-        if stable_mode_default():
+        if stable_mode_default(out, str(watch_path)):
             (out / FRESHNESS_FILENAME).write_text(
                 freshness_report(
                     {"warning": "cluster-only mode — file stats not available"},

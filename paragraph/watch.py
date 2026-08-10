@@ -104,7 +104,7 @@ def _rebuild_code(watch_path: Path, *, follow_symlinks: bool = False) -> bool:
                           {"input": 0, "output": 0}, report_root, suggested_questions=questions,
                           out_dir=out)
         (out / "GRAPH_REPORT.md").write_text(report, encoding="utf-8")
-        if stable_mode_default():
+        if stable_mode_default(out, report_root):
             (out / FRESHNESS_FILENAME).write_text(
                 freshness_report(detection, report_root, out_dir=out), encoding="utf-8")
         # force=True: code-only rebuilds preserve semantic nodes internally

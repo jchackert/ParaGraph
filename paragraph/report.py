@@ -10,24 +10,55 @@ import networkx as nx
 _BARE_LABEL = re.compile(r"^Community \d+$")
 
 FRESHNESS_FILENAME = "GRAPH_FRESHNESS.md"
+STABLE_MARKER_FILENAME = ".stable_report"
 
 _TRUTHY = {"1", "true", "True", "yes", "on"}
 
 
-def stable_mode_default() -> bool:
+def _resolve_out_dir(root: str | None, out_dir: str | Path | None) -> Path | None:
+    """Locate the graphify-out directory, preferring an explicit path."""
+    if out_dir:
+        return Path(out_dir)
+    if root is not None:
+        candidate = Path(root) / "graphify-out"
+        if candidate.is_dir():
+            return candidate
+    return Path("graphify-out") if Path("graphify-out").is_dir() else None
+
+
+def stable_mode_default(out_dir: str | Path | None = None, root: str | None = None) -> bool:
     """Whether to omit wall-clock-varying fields from GRAPH_REPORT.md.
 
-    Off by default. Set PARAGRAPH_STABLE_REPORT=1 to turn it on.
+    Off by default. Enabled by EITHER:
+      - a `graphify-out/.stable_report` marker file, or
+      - PARAGRAPH_STABLE_REPORT=1 in the environment.
 
-    Why this exists: the report's generation date, corpus file/word counts, and
-    "source files changed since" counters move on every run whether or not the
-    graph changed. For a consumer that commits GRAPH_REPORT.md to git, that means
-    a rebuild can never produce a no-op diff, so "the file is dirty" stops meaning
-    "something happened" and the signal is lost. In stable mode those fields move
-    to a sidecar (see `freshness_report`) which the consumer can gitignore; they
-    are relocated, never dropped.
+    The marker is the primary mechanism and the env var is a per-invocation
+    override: an explicitly set variable wins in both directions, so
+    PARAGRAPH_STABLE_REPORT=0 disables stable mode even where a marker exists.
+    An unset or empty variable defers to the marker.
+
+    Why the marker exists rather than the variable alone: stable mode is a
+    property of the *corpus*, not of one command. A repository that commits
+    GRAPH_REPORT.md wants it stable no matter who rebuilds — the rebuild script,
+    a bare `paragraph update`, an editor hook, or a caller that has never heard
+    of this setting. An environment variable exported by one script is silently
+    bypassed by every other path, which is exactly how a wired-but-ineffective
+    fix happens.
+
+    Why stable mode exists at all: the report's generation date, corpus file/word
+    counts, and "source files changed since" counters move on every run whether or
+    not the graph changed. For a consumer that commits GRAPH_REPORT.md to git, a
+    rebuild can then never produce a no-op diff, so "the file is dirty" stops
+    meaning "something happened" and the signal is lost. In stable mode those
+    fields move to a sidecar (see `freshness_report`) which the consumer can
+    gitignore; they are relocated, never dropped.
     """
-    return os.environ.get("PARAGRAPH_STABLE_REPORT", "") in _TRUTHY
+    raw = os.environ.get("PARAGRAPH_STABLE_REPORT", "").strip()
+    if raw:
+        return raw in _TRUTHY
+    out = _resolve_out_dir(root, out_dir)
+    return out is not None and (out / STABLE_MARKER_FILENAME).is_file()
 
 
 def _auto_labels(G: nx.Graph, communities: dict[int, list[str]]) -> dict[int, str]:
@@ -90,13 +121,7 @@ def _freshness_lines(root: str, out_dir: str | Path | None = None) -> list[str]:
     Never fabricates: with no manifest we say so explicitly.
     """
     lines = ["", "## Extraction Freshness"]
-    out = Path(out_dir) if out_dir else None
-    if out is None:
-        candidate = Path(root) / "graphify-out"
-        if candidate.is_dir():
-            out = candidate
-        elif Path("graphify-out").is_dir():
-            out = Path("graphify-out")
+    out = _resolve_out_dir(root, out_dir)
     manifest_path = (out / "manifest.json") if out is not None else None
     if manifest_path is None or not manifest_path.is_file():
         lines.append("- Last full semantic extraction: unknown — no record")
@@ -196,7 +221,7 @@ def generate(
     so existing callers keep their current output byte for byte.
     """
     if stable is None:
-        stable = stable_mode_default()
+        stable = stable_mode_default(out_dir, root)
     today = date.today().isoformat()
 
     confidences = [d.get("confidence", "EXTRACTED") for _, _, d in G.edges(data=True)]

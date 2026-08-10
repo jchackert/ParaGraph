@@ -203,3 +203,68 @@ def test_freshness_sidecar_carries_the_volatile_values():
     assert "62,400 words" in side
     assert "## Corpus Check" in side
     assert "## Extraction Freshness" in side
+
+
+# --- marker file (graphify-out/.stable_report) --------------------------------
+# The marker makes stable mode a property of the corpus rather than of one
+# command, so it survives any invocation path. An env var exported by a single
+# script is silently bypassed by every other caller.
+
+def test_marker_file_enables_stable_mode(tmp_path, monkeypatch):
+    from paragraph.report import stable_mode_default, STABLE_MARKER_FILENAME
+    monkeypatch.delenv("PARAGRAPH_STABLE_REPORT", raising=False)
+    out = tmp_path / "graphify-out"
+    out.mkdir()
+    assert stable_mode_default(out) is False
+    (out / STABLE_MARKER_FILENAME).write_text("")
+    assert stable_mode_default(out) is True
+
+
+def test_marker_found_via_root_when_out_dir_not_given(tmp_path, monkeypatch):
+    from paragraph.report import stable_mode_default, STABLE_MARKER_FILENAME
+    monkeypatch.delenv("PARAGRAPH_STABLE_REPORT", raising=False)
+    out = tmp_path / "graphify-out"
+    out.mkdir()
+    (out / STABLE_MARKER_FILENAME).write_text("")
+    assert stable_mode_default(None, str(tmp_path)) is True
+
+
+def test_env_var_overrides_marker_in_both_directions(tmp_path, monkeypatch):
+    from paragraph.report import stable_mode_default, STABLE_MARKER_FILENAME
+    out = tmp_path / "graphify-out"
+    out.mkdir()
+    (out / STABLE_MARKER_FILENAME).write_text("")
+    monkeypatch.setenv("PARAGRAPH_STABLE_REPORT", "0")
+    assert stable_mode_default(out) is False      # explicit off beats the marker
+    monkeypatch.setenv("PARAGRAPH_STABLE_REPORT", "1")
+    assert stable_mode_default(out) is True
+
+
+def test_empty_env_var_defers_to_marker(tmp_path, monkeypatch):
+    from paragraph.report import stable_mode_default, STABLE_MARKER_FILENAME
+    out = tmp_path / "graphify-out"
+    out.mkdir()
+    (out / STABLE_MARKER_FILENAME).write_text("")
+    monkeypatch.setenv("PARAGRAPH_STABLE_REPORT", "")
+    assert stable_mode_default(out) is True
+
+
+def test_no_marker_and_no_env_is_off(tmp_path, monkeypatch):
+    from paragraph.report import stable_mode_default
+    monkeypatch.delenv("PARAGRAPH_STABLE_REPORT", raising=False)
+    out = tmp_path / "graphify-out"
+    out.mkdir()
+    assert stable_mode_default(out) is False
+
+
+def test_generate_picks_up_marker_without_env(tmp_path, monkeypatch):
+    from paragraph.report import STABLE_MARKER_FILENAME
+    monkeypatch.delenv("PARAGRAPH_STABLE_REPORT", raising=False)
+    out = tmp_path / "graphify-out"
+    out.mkdir()
+    (out / STABLE_MARKER_FILENAME).write_text("")
+    G, communities, cohesion, labels, gods, surprises, detection, tokens = make_inputs()
+    report = generate(G, communities, cohesion, labels, gods, surprises, detection,
+                      tokens, str(tmp_path), out_dir=out)
+    assert "62,400 words" not in report
+    assert "GRAPH_FRESHNESS.md" in report
