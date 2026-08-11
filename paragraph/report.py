@@ -279,10 +279,18 @@ def generate(
 
     pretty_labels, display_labels = _resolve_labels(G, communities, community_labels)
 
+    # The Summary line is what gets quoted into commit messages and compared against
+    # graph.json, so it leads with the total — the same number a consumer counts from
+    # the json's distinct node.community values. `non_empty` filters out communities
+    # made up entirely of file-level hub and AST-stub nodes; that is a useful analytic
+    # figure but it is NOT the graph's community count, and publishing it under the
+    # bare label "communities detected" is what let a filtered count be committed as
+    # the graph's own (ParaNote #453).
     lines += [
         "",
         "## Summary",
-        f"- {G.number_of_nodes()} nodes · {G.number_of_edges()} edges · {len(non_empty)} communities detected",
+        f"- {G.number_of_nodes()} nodes · {G.number_of_edges()} edges · {len(communities)} communities detected"
+        + (f" ({len(non_empty)} with non-file nodes)" if len(non_empty) != len(communities) else ""),
         f"- Extraction: {ext_pct}% EXTRACTED · {inf_pct}% INFERRED · {amb_pct}% AMBIGUOUS"
         + (f" · INFERRED: {len(inf_edges)} edges (avg confidence: {inf_avg})" if inf_avg is not None else ""),
         f"- Token cost: {token_cost.get('input', 0):,} input · {token_cost.get('output', 0):,} output",
