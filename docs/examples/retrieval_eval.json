@@ -1,0 +1,33 @@
+{
+  "description": "Template for a hand-labeled retrieval eval. Copy next to your graphify-out/, replace the queries with real questions from your own sessions, and run: paragraph retrieve --eval <this file>. Each query lists what should rank in the top 10 (expected_*) and what should NOT despite keyword similarity (negative_nodes).",
+  "created_at": "2026-08-18",
+  "embed_model": "nomic-embed-text",
+  "changelog": [
+    "v1: initial labels. Rule: never silently relabel old queries — bump the version and document the rationale here."
+  ],
+  "queries": [
+    {
+      "id": "q1",
+      "query": "where does login validation happen",
+      "intent": "Find the auth entry point and its validation path",
+      "expected_nodes": ["SessionManager", "validate"],
+      "negative_nodes": ["SessionStore"]
+    },
+    {
+      "id": "q2",
+      "query": "what did we decide about token refresh",
+      "intent": "Find the recorded decision, which lives in an observation, not code",
+      "expected_nodes": [],
+      "expected_observations": ["token", "refresh"],
+      "negative_nodes": []
+    },
+    {
+      "id": "q3",
+      "query": "how is offline mode supposed to work",
+      "intent": "Answer lives in docs, not code — tests doc-chunk retrieval",
+      "expected_nodes": [],
+      "expected_docs": ["offline", "sync"],
+      "negative_nodes": []
+    }
+  ]
+}

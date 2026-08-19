@@ -467,6 +467,8 @@ questions = suggest_questions(G, communities, labels)
 report = generate(G, communities, cohesion, labels, gods, surprises, detection, tokens, 'INPUT_PATH', suggested_questions=questions)
 Path('graphify-out/GRAPH_REPORT.md').write_text(report)
 to_json(G, communities, 'graphify-out/graph.json', community_labels=labels)
+from paragraph.insights import record_history
+record_history(Path('graphify-out'), G, communities)
 Path('graphify-out/.paragraph_labels.json').write_text(json.dumps({str(k): v for k, v in labels.items()}))
 
 analysis = {
@@ -556,7 +558,7 @@ viz = to_html_auto(G, communities, 'graphify-out/graph.html', community_labels=l
 if viz == 'aggregated':
     print(f'Graph has {G.number_of_nodes()} nodes (above the full-viz limit).')
     print(f'graph.html written as aggregated community view ({len(communities)} community nodes)')
-    print('Tip: full node-level detail lives in graph.json and GRAPH_REPORT.md.')
+    print('Double-click a community in the overview to open its full subgraph (graph_communities/).')
 elif viz == 'skipped':
     print('Single community too large for full viz — aggregated view not useful. Skipping graph.html.')
 else:
@@ -626,10 +628,10 @@ print('graph.graphml written - open in Gephi, yEd, or any GraphML tool')
 ### Step 7d - MCP server (only if --mcp flag)
 
 ```bash
-python3 -m paragraph.serve graphify-out/graph.json
+paragraph serve graphify-out/graph.json
 ```
 
-This starts a stdio MCP server that exposes tools: `query_graph`, `get_node`, `get_neighbors`, `get_community`, `god_nodes`, `graph_stats`, `shortest_path`. Add to Claude Desktop or any MCP-compatible agent orchestrator so other agents can query the graph live.
+This starts a stdio MCP server that exposes tools: `query_graph`, `get_node`, `get_neighbors`, `get_community`, `god_nodes`, `graph_stats`, `shortest_path`, `retrieve` (semantic, needs `paragraph enrich` + local ollama), and `insights` (architectural analysis). Add to Claude Desktop or any MCP-compatible agent orchestrator so other agents can query the graph live.
 
 To configure in Claude Desktop, add to `claude_desktop_config.json`:
 ```json

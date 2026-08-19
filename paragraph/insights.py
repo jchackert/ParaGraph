@@ -2,12 +2,16 @@
 # cross-community cycles. Consumed by `paragraph analyze` and GRAPH_INSIGHTS.md.
 from __future__ import annotations
 
+import json
+import time
 from collections import Counter
 from pathlib import Path
 
 import networkx as nx
 
 from paragraph.analyze import _node_community_map
+
+HISTORY_FILENAME = ".paragraph_history.jsonl"
 
 
 def _top_level_dir(path: str) -> str:
@@ -152,6 +156,90 @@ def community_cycles(
     return cycles[:max_cycles]
 
 
+# ---------------------------------------------------------------------------
+# Rebuild history — powers the Trends section
+# ---------------------------------------------------------------------------
+
+def record_history(out_dir: Path, G: nx.Graph,
+                   communities: dict[int, list[str]]) -> dict:
+    """Append a structural snapshot of this rebuild to the history sidecar.
+
+    Called by every graph writer (skill, watch, cluster-only, analyze) so
+    trends compare rebuild-to-rebuild regardless of which path ran.
+    Structurally identical consecutive snapshots are not duplicated.
+    """
+    degree = dict(G.degree())
+    snapshot = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "nodes": G.number_of_nodes(),
+        "edges": G.number_of_edges(),
+        "communities": len(communities),
+        "cycles": len(community_cycles(G, communities)),
+        "orphans": sum(1 for d in degree.values() if d == 0),
+    }
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    history = load_history(out_dir)
+    if history and all(history[-1].get(k) == v for k, v in snapshot.items() if k != "ts"):
+        return history[-1]  # structurally unchanged — keep the earlier timestamp
+    with open(out_dir / HISTORY_FILENAME, "a", encoding="utf-8") as f:
+        f.write(json.dumps(snapshot) + "\n")
+    return snapshot
+
+
+def load_history(out_dir: Path) -> list[dict]:
+    path = Path(out_dir) / HISTORY_FILENAME
+    if not path.exists():
+        return []
+    entries = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return entries
+
+
+def _delta(new: int, old: int) -> str:
+    d = new - old
+    return f"+{d}" if d > 0 else str(d)
+
+
+def trends_section(history: list[dict]) -> list[str]:
+    """Markdown lines for the Trends section; empty if under two snapshots."""
+    if len(history) < 2:
+        return []
+    latest, prev, first = history[-1], history[-2], history[0]
+    lines = ["## Trends", ""]
+    lines.append(f"{len(history)} rebuilds recorded "
+                 f"({first.get('ts', '?')} to {latest.get('ts', '?')}).")
+    lines.append("")
+    lines.append("| Metric | Now | vs previous rebuild | vs first recorded |")
+    lines.append("|---|---|---|---|")
+    for key, label in (("nodes", "Nodes"), ("edges", "Edges"),
+                       ("communities", "Communities"), ("cycles", "Dependency cycles"),
+                       ("orphans", "Orphans")):
+        now = latest.get(key, 0)
+        lines.append(f"| {label} | {now} | {_delta(now, prev.get(key, 0))} "
+                     f"| {_delta(now, first.get(key, 0))} |")
+    lines.append("")
+    warnings = []
+    if latest.get("cycles", 0) > prev.get("cycles", 0):
+        warnings.append(f"Dependency cycles increased ({prev.get('cycles', 0)} to "
+                        f"{latest.get('cycles', 0)}) — a layering violation may have been introduced.")
+    if latest.get("orphans", 0) > prev.get("orphans", 0):
+        warnings.append(f"Orphan nodes increased ({prev.get('orphans', 0)} to "
+                        f"{latest.get('orphans', 0)}) — possible dead code accumulating.")
+    for w in warnings:
+        lines.append(f"**Warning: {w}**")
+    if warnings:
+        lines.append("")
+    return lines
+
+
 def insights_markdown(
     G: nx.Graph,
     communities: dict[int, list[str]],
@@ -159,6 +247,7 @@ def insights_markdown(
     community_labels: dict[int, str] | None = None,
     *,
     max_communities: int = 25,
+    history: list[dict] | None = None,
 ) -> str:
     """Render the full analysis as a GRAPH_INSIGHTS.md document."""
     labels = community_labels or {}
@@ -204,6 +293,9 @@ def insights_markdown(
         for o in roles["orphans"][:5]:
             lines.append(f"- {o['label']} ({o['source_file'] or 'unknown source'})")
         lines.append("")
+
+    for line in trends_section(history or []):
+        lines.append(line)
 
     lines.append("## Cross-community dependency cycles")
     lines.append("")

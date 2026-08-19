@@ -234,6 +234,24 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
                     "required": ["source", "target"],
                 },
             ),
+            types.Tool(
+                name="retrieve",
+                description="Semantic retrieval over the enriched graph. Diversity-aware, eval-tuned ranking over vectors.db embeddings. Requires `paragraph enrich` to have been run and a local ollama.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string", "description": "Natural language question"},
+                        "top_k": {"type": "integer", "default": 10, "description": "Ranked results to keep"},
+                        "token_budget": {"type": "integer", "default": 8000, "description": "Token budget for packed chunks"},
+                    },
+                    "required": ["question"],
+                },
+            ),
+            types.Tool(
+                name="insights",
+                description="Architectural analysis of the graph: community summaries (size, cohesion, isolation), hub/bridge/orphan nodes, and cross-community dependency cycles.",
+                inputSchema={"type": "object", "properties": {}},
+            ),
         ]
 
     def _tool_query_graph(arguments: dict) -> str:
@@ -340,6 +358,39 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
             segments.append(f"--{rel}{conf_str}--> {G.nodes[v].get('label', v)}")
         return f"Shortest path ({hops} hops):\n  " + " ".join(segments)
 
+    def _tool_retrieve(arguments: dict) -> str:
+        import sqlite3
+        vectors_path = Path(graph_path).parent / "vectors.db"
+        if not vectors_path.exists():
+            return ("vectors.db not found next to the graph — run `paragraph enrich` "
+                    "first (builds embeddings; needs a local ollama).")
+        from .retrieve import (GraphIndex, RetrievalUnavailable,
+                               format_text, retrieve as _retrieve)
+        graph_data = json.loads(Path(graph_path).read_text(encoding="utf-8"))
+        gidx = GraphIndex(graph_data)
+        conn = sqlite3.connect(str(vectors_path))
+        try:
+            result = _retrieve(
+                arguments["question"], conn, gidx,
+                budget_tokens=int(arguments.get("token_budget", 8000)),
+                top_k=int(arguments.get("top_k", 10)),
+            )
+            return format_text(result)
+        except RetrievalUnavailable as exc:
+            return f"Retrieval unavailable (embedding backend down, not a corpus answer): {exc}"
+        finally:
+            conn.close()
+
+    def _tool_insights(_: dict) -> str:
+        from .cluster import score_all
+        from .insights import insights_markdown
+        labels = {
+            int(k): v
+            for k, v in (G.graph.get("community_labels") or {}).items()
+            if str(k).lstrip("-").isdigit()
+        }
+        return insights_markdown(G, communities, score_all(G, communities), labels or None)
+
     _handlers = {
         "query_graph": _tool_query_graph,
         "get_node": _tool_get_node,
@@ -348,6 +399,8 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
         "god_nodes": _tool_god_nodes,
         "graph_stats": _tool_graph_stats,
         "shortest_path": _tool_shortest_path,
+        "retrieve": _tool_retrieve,
+        "insights": _tool_insights,
     }
 
     @server.call_tool()

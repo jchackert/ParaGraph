@@ -206,3 +206,24 @@ def test_to_json_persists_community_labels():
         to_json(G, communities, str(out), community_labels=labels)
         data = json.loads(out.read_text())
         assert data["graph"]["community_labels"] == {str(k): v for k, v in labels.items()}
+
+
+def test_to_html_auto_aggregated_writes_drilldown_pages(monkeypatch):
+    import paragraph.export as export_mod
+    G = make_graph()
+    communities = cluster(G)
+    assert 1 < len(communities) < G.number_of_nodes()
+    monkeypatch.setattr(export_mod, "MAX_NODES_FOR_VIZ", len(communities))
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "graph.html"
+        assert export_mod.to_html_auto(G, communities, str(out),
+                                       community_labels={cid: f"Area {cid}" for cid in communities}) == "aggregated"
+        overview = out.read_text()
+        pages = sorted((Path(tmp) / "graph_communities").glob("community_*.html"))
+        # every multi-member community gets a page, linked from the overview
+        multi = [cid for cid, m in communities.items() if len(m) > 1]
+        assert len(pages) == len(multi)
+        for cid in multi:
+            assert f"graph_communities/community_{cid}.html" in overview
+        page = pages[0].read_text()
+        assert "Overview</a>" in page and "vis-network" in page

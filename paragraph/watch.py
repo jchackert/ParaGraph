@@ -125,6 +125,8 @@ def _rebuild_code(watch_path: Path, *, follow_symlinks: bool = False) -> bool:
         # due to code-node ID churn from AST re-extraction. The safety check
         # in to_json would refuse to write, causing silent rebuild failures.
         to_json(G, communities, str(out / "graph.json"), community_labels=labels, force=True)
+        from paragraph.insights import record_history
+        record_history(out, G, communities)
 
         # Graphs over MAX_NODES_FOR_VIZ get an aggregated community-level
         # graph.html instead of none; only a single oversized community skips.
@@ -132,7 +134,8 @@ def _rebuild_code(watch_path: Path, *, follow_symlinks: bool = False) -> bool:
         html_written = viz != "skipped"
         if viz == "aggregated":
             print(f"[paragraph watch] graph.html rendered as aggregated community view "
-                  f"({G.number_of_nodes()} nodes exceed the full-viz limit)")
+                  f"({G.number_of_nodes()} nodes exceed the full-viz limit); "
+                  f"double-click a community for its full subgraph")
         elif viz == "skipped":
             print("[paragraph watch] Skipped graph.html: graph too large for full viz "
                   "and community structure cannot be aggregated into a useful view")

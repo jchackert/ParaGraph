@@ -367,8 +367,22 @@ def load_graph(path: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Build a fast stem → [node_id] lookup from the existing graph
+# Node lookup indexes from the existing graph
 # ---------------------------------------------------------------------------
+def _norm_path(path: str) -> str:
+    return str(path).replace("\\", "/").lstrip("./").lower()
+
+
+def build_path_index(nodes: list[dict]) -> dict[str, list[str]]:
+    """Normalized source_file path -> [node_ids] for every node with a source."""
+    index: dict[str, list[str]] = {}
+    for node in nodes:
+        sf = node.get("source_file")
+        if sf and sf != "<synthesized>":
+            index.setdefault(_norm_path(sf), []).append(node["id"])
+    return index
+
+
 def build_stem_index(nodes: list[dict]) -> dict[str, list[str]]:
     index: dict[str, list[str]] = {}
     for node in nodes:
@@ -383,11 +397,34 @@ def shortest_match(candidates: list[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Map a relative file path to the best-matching graph node ID
+# Map a file path from an observation to the best-matching graph node ID
 # ---------------------------------------------------------------------------
 def file_path_to_node_id(
-    file_path: str, stem_index: dict[str, list[str]]
+    file_path: str,
+    stem_index: dict[str, list[str]],
+    path_index: dict[str, list[str]] | None = None,
 ) -> str | None:
+    """Resolve an observation's file path to a graph node.
+
+    Tries, in order: exact normalized source_file match; unambiguous path
+    suffix match (either path a suffix of the other at a '/' boundary);
+    filename-stem match as the legacy fallback. Stem-only matching mis-links
+    when two directories contain same-named files, so path matches win.
+    """
+    if path_index:
+        norm = _norm_path(file_path)
+        candidates = path_index.get(norm)
+        if candidates:
+            return shortest_match(candidates)
+        suffix_hits = [
+            ids for p, ids in path_index.items()
+            if p.endswith("/" + norm) or norm.endswith("/" + p)
+        ]
+        if len(suffix_hits) == 1:
+            return shortest_match(suffix_hits[0])
+        if len(suffix_hits) > 1:
+            return None  # ambiguous across directories — do not guess
+
     stem = Path(file_path).stem.lower()
     candidates = stem_index.get(stem)
     if not candidates:
@@ -448,7 +485,9 @@ def observation_to_node(obs: dict) -> dict:
 
 
 def observation_to_edges(
-    obs: dict, stem_index: dict[str, list[str]]
+    obs: dict,
+    stem_index: dict[str, list[str]],
+    path_index: dict[str, list[str]] | None = None,
 ) -> tuple[list[dict], int]:
     files_read = _parse_json_list(obs.get("files_read"))
     files_modified = _parse_json_list(obs.get("files_modified"))
@@ -464,7 +503,7 @@ def observation_to_edges(
         seen[f] = "modified"
 
     for file_path, relation in seen.items():
-        target = file_path_to_node_id(file_path, stem_index)
+        target = file_path_to_node_id(file_path, stem_index, path_index)
         if target is None:
             skipped += 1
             continue
@@ -536,7 +575,9 @@ def run(
     ]
 
     stem_index = build_stem_index(existing_nodes)
-    print(f"Stem index built: {len(stem_index)} unique stems across {len(existing_nodes)} nodes.")
+    path_index = build_path_index(existing_nodes)
+    print(f"Indexes built: {len(path_index)} source paths, {len(stem_index)} stems "
+          f"across {len(existing_nodes)} nodes.")
 
     print(f"Fetching observations from {db_path} ...")
     raw_observations = fetch_observations(db_path, target_project, TARGET_TYPES)
@@ -603,7 +644,7 @@ def run(
     for obs in deduped_obs:
         node = observation_to_node(obs)
         new_nodes.append(node)
-        edges, skipped = observation_to_edges(obs, stem_index)
+        edges, skipped = observation_to_edges(obs, stem_index, path_index)
         new_edges.extend(edges)
         total_skipped += skipped
 

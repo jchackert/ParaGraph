@@ -74,8 +74,9 @@ def test_enrich_timestamps_all_nodes(tmp_path):
 
 def test_embed_and_store_roundtrip(tmp_path):
     graph, out = make_project(tmp_path)
-    embedded, results = embed_nodes(graph, StubEmbedder())
+    embedded, skipped, results = embed_nodes(graph, StubEmbedder())
     assert embedded == len(results) == 4
+    assert skipped == 0
     conn = init_vector_store(out / "vectors.db")
     stored = store_embeddings(conn, results)
     assert stored == 4
@@ -103,3 +104,48 @@ def test_run_bodies_only_no_ollama(tmp_path):
 
 def test_run_missing_graph_errors(tmp_path):
     assert run(tmp_path, bodies_only=True) == 1
+
+
+def test_incremental_embed_skips_unchanged(tmp_path):
+    from paragraph.enrich import load_existing_hashes, prune_deleted_nodes
+    graph, out = make_project(tmp_path)
+    emb = StubEmbedder()
+    _, _, results = embed_nodes(graph, emb)
+    conn = init_vector_store(out / "vectors.db")
+    store_embeddings(conn, results)
+
+    # Re-run with existing hashes: everything unchanged -> all skipped
+    existing = load_existing_hashes(conn, emb.model_name)
+    embedded, skipped, results2 = embed_nodes(graph, emb, existing_hashes=existing)
+    assert embedded == 0 and skipped == 4 and results2 == []
+
+    # Change one node's label -> only that node re-embeds
+    graph["nodes"][0]["label"] = "SessionManagerRenamed"
+    embedded, skipped, results3 = embed_nodes(graph, emb, existing_hashes=existing)
+    assert embedded == 1 and skipped == 3
+    assert results3[0]["node_id"] == "sessionmanager"
+
+    # Deleting a node prunes its embedding row
+    graph["nodes"] = [n for n in graph["nodes"] if n["id"] != "validate"]
+    assert prune_deleted_nodes(conn, graph) == 1
+    remaining = {r[0] for r in conn.execute("SELECT node_id FROM embeddings")}
+    assert "validate" not in remaining
+    conn.close()
+
+
+def test_old_schema_migrates(tmp_path):
+    import sqlite3 as _sq
+    from paragraph.enrich import load_existing_hashes
+    db = tmp_path / "vectors.db"
+    conn = _sq.connect(str(db))
+    conn.execute("""CREATE TABLE embeddings (
+        node_id TEXT PRIMARY KEY, embedding BLOB NOT NULL, embed_model TEXT NOT NULL,
+        text TEXT, file_type TEXT, label TEXT, source_file TEXT, community INTEGER,
+        observation_type TEXT, captured_at TEXT, last_touched_at TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP)""")
+    conn.commit(); conn.close()
+    conn = init_vector_store(db)  # migration adds text_hash
+    assert load_existing_hashes(conn, "nomic-embed-text") == {}
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(embeddings)")]
+    assert "text_hash" in cols
+    conn.close()

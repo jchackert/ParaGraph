@@ -21,7 +21,7 @@ Usage:
     paragraph retrieve "where does the avatar color come from"
     paragraph retrieve --budget 4000 "how does byok work"
     paragraph retrieve --json "nudge suppression"
-    paragraph retrieve --eval evals/retrieval_eval.json
+    paragraph retrieve --eval docs/examples/retrieval_eval.json (template)
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ DEFAULT_VECTORS_DB_PATH = Path("graphify-out") / "vectors.db"
 OLLAMA_URL = "http://localhost:11434/api/embeddings"
 EMBED_MODEL = "nomic-embed-text"
 
-# Retrieval parameters — pinned v1 configuration (evals/README.md, Run 7/8).
+# Retrieval parameters — pinned v1 configuration (docs/RETRIEVAL_EVAL.md; ParaNote runs 7/8).
 # Do not tune without re-running the eval.
 VECTOR_TOP_N = 50
 PARENT_SCORE_FACTOR = 0.90
@@ -489,7 +489,7 @@ def retrieve(
 
 
 # ---------------------------------------------------------------------------
-# Eval scoring (protocol from PARA_Note evals/README.md)
+# Eval scoring (protocol: docs/RETRIEVAL_EVAL.md)
 # ---------------------------------------------------------------------------
 def score_query(q: dict, result: RetrievalResult) -> tuple[float, int, str]:
     """Score one eval query against a retrieval result.

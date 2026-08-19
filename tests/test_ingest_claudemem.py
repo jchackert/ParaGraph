@@ -305,3 +305,40 @@ def test_paranote_example_config_parses():
     assert "carol" in cfg.domain_keywords
     assert cfg.reviewers == ["Carol", "Sam"]
     assert cfg.ticket_patterns and cfg.dedup_ignore_names
+
+
+def test_path_match_beats_stem_collision():
+    from paragraph.ingest_claudemem import (
+        build_path_index, build_stem_index, file_path_to_node_id,
+    )
+    nodes = [
+        {"id": "users_auth_utils_swift", "source_file": "auth/utils.swift"},
+        {"id": "net_utils_swift", "source_file": "network/utils.swift"},
+    ]
+    path_index = build_path_index(nodes)
+    stem_index = build_stem_index(nodes)
+    assert file_path_to_node_id("auth/utils.swift", stem_index, path_index) == "users_auth_utils_swift"
+    assert file_path_to_node_id("network/utils.swift", stem_index, path_index) == "net_utils_swift"
+
+
+def test_ambiguous_suffix_does_not_guess():
+    from paragraph.ingest_claudemem import (
+        build_path_index, build_stem_index, file_path_to_node_id,
+    )
+    nodes = [
+        {"id": "a", "source_file": "auth/utils.swift"},
+        {"id": "b", "source_file": "network/utils.swift"},
+    ]
+    path_index = build_path_index(nodes)
+    # bare filename matches both directories at a suffix boundary -> refuse
+    assert file_path_to_node_id("utils.swift", {}, path_index) is None
+
+
+def test_stem_fallback_still_works():
+    from paragraph.ingest_claudemem import (
+        build_path_index, build_stem_index, file_path_to_node_id,
+    )
+    nodes = [{"id": "session_manager", "source_file": None}]
+    path_index = build_path_index(nodes)  # empty — no source paths
+    stem_index = build_stem_index(nodes)
+    assert file_path_to_node_id("lib/session.py", stem_index, path_index) == "session_manager"

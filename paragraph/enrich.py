@@ -5,6 +5,7 @@
 # so it runs against any project's graphify-out/.
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -20,6 +21,10 @@ DEFAULT_EMBED_MODEL = "nomic-embed-text"
 MAX_BODY_CHARS = 2000
 # Max chars sent to embedder
 MAX_EMBED_CHARS = 1500
+
+
+def _text_hash(text: str) -> str:
+    return hashlib.sha1(text.encode("utf-8", errors="replace")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -340,12 +345,19 @@ def build_embed_text(node: dict, children_index: dict[str, list[str]] | None = N
 
 
 def embed_nodes(graph: dict, embedder: Embedder,
-                project_root: Path | None = None) -> tuple[int, list[dict]]:
-    """Embed all nodes. Returns (count, results)."""
+                project_root: Path | None = None,
+                existing_hashes: dict[str, str] | None = None) -> tuple[int, int, list[dict]]:
+    """Embed nodes. Returns (embedded, skipped, results).
+
+    existing_hashes maps node_id -> text_hash of the stored embedding (for the
+    current model); nodes whose embed text is unchanged are skipped, which
+    makes re-running enrich after a rebuild cheap.
+    """
     nodes = graph.get("nodes", [])
     children_index = build_children_index(graph)
     results = []
     embedded = 0
+    skipped = 0
     total = len(nodes)
     t0 = time.time()
 
@@ -354,12 +366,18 @@ def embed_nodes(graph: dict, embedder: Embedder,
         if len(text.strip()) < 5:
             continue
 
+        th = _text_hash(text)
+        if existing_hashes and existing_hashes.get(node["id"]) == th:
+            skipped += 1
+            continue
+
         emb = embedder.embed(text)
         if emb:
             results.append({
                 "node_id": node["id"],
                 "embedding": emb,
                 "text": text[:500],
+                "text_hash": th,
                 "embed_model": embedder.model_name,
                 "metadata": {
                     "file_type": node.get("file_type", "unknown"),
@@ -379,7 +397,7 @@ def embed_nodes(graph: dict, embedder: Embedder,
             eta = (total - i - 1) / rate
             print(f"    Embedded {i+1}/{total} ({rate:.0f}/s, ETA {eta:.0f}s)")
 
-    return embedded, results
+    return embedded, skipped, results
 
 
 # ---------------------------------------------------------------------------
@@ -401,9 +419,14 @@ def init_vector_store(db_path: Path) -> sqlite3.Connection:
             observation_type TEXT,
             captured_at TEXT,
             last_touched_at TEXT,
+            text_hash TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    try:  # migrate pre-0.2 stores that lack the incremental-skip column
+        conn.execute("ALTER TABLE embeddings ADD COLUMN text_hash TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_emb_type ON embeddings(file_type)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_emb_community ON embeddings(community)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_emb_model ON embeddings(embed_model)")
@@ -418,8 +441,9 @@ def store_embeddings(conn: sqlite3.Connection, results: list[dict]) -> int:
         conn.execute(
             """INSERT OR REPLACE INTO embeddings
                (node_id, embedding, embed_model, text, file_type, label,
-                source_file, community, observation_type, captured_at, last_touched_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                source_file, community, observation_type, captured_at,
+                last_touched_at, text_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 r["node_id"],
                 json.dumps(r["embedding"]).encode(),
@@ -432,11 +456,35 @@ def store_embeddings(conn: sqlite3.Connection, results: list[dict]) -> int:
                 meta.get("observation_type"),
                 meta.get("captured_at"),
                 meta.get("last_touched_at"),
+                r.get("text_hash"),
             ),
         )
         stored += 1
     conn.commit()
     return stored
+
+
+def load_existing_hashes(conn: sqlite3.Connection, model: str) -> dict[str, str]:
+    """node_id -> text_hash for embeddings stored with this model."""
+    try:
+        rows = conn.execute(
+            "SELECT node_id, text_hash FROM embeddings WHERE embed_model = ? AND text_hash IS NOT NULL",
+            (model,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return dict(rows)
+
+
+def prune_deleted_nodes(conn: sqlite3.Connection, graph: dict) -> int:
+    """Remove embeddings for nodes no longer present in the graph."""
+    live = {n["id"] for n in graph.get("nodes", [])}
+    rows = conn.execute("SELECT node_id FROM embeddings").fetchall()
+    stale = [r[0] for r in rows if r[0] not in live]
+    for nid in stale:
+        conn.execute("DELETE FROM embeddings WHERE node_id = ?", (nid,))
+    conn.commit()
+    return len(stale)
 
 
 # ---------------------------------------------------------------------------
@@ -480,12 +528,16 @@ def run(
     bodies_only: bool = False,
     embed_only: bool = False,
     stats_only: bool = False,
+    full: bool = False,
     model: str = DEFAULT_EMBED_MODEL,
     ollama_url: str = OLLAMA_URL,
 ) -> int:
     """Run the enrichment pipeline against <project_path>/graphify-out/.
 
     Steps: source bodies -> timestamps -> embeddings into vectors.db.
+    Embedding is incremental: nodes whose embed text is unchanged since the
+    last run are skipped (pass full=True to re-embed everything); embeddings
+    for deleted nodes are pruned.
     Embeddings need a running ollama with the model pulled; the first two
     steps are pure-local and run without it.
     """
@@ -526,13 +578,16 @@ def run(
             return 1
         print(f"  Model: {embedder.model_name} ({embedder.dims}d)")
 
-        embedded, results = embed_nodes(graph, embedder, project_root=project_path)
-        print(f"  Embedded {embedded} nodes")
-
         conn = init_vector_store(vectors_db)
+        existing = {} if full else load_existing_hashes(conn, embedder.model_name)
+        embedded, skipped, results = embed_nodes(
+            graph, embedder, project_root=project_path, existing_hashes=existing)
+        print(f"  Embedded {embedded} nodes ({skipped} unchanged, skipped)")
+
         stored = store_embeddings(conn, results)
+        pruned = prune_deleted_nodes(conn, graph)
         conn.close()
-        print(f"  Stored {stored} embeddings")
+        print(f"  Stored {stored} embeddings" + (f", pruned {pruned} stale" if pruned else ""))
 
     print()
     print_stats(graph, vectors_db)

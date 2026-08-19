@@ -4,6 +4,14 @@
 
 ### Added
 
+- **Path-based observation linking** -- `ingest-claude-mem` matches observation file paths against node `source_file` (exact, then unambiguous suffix) before falling back to filename stems; same-named files in different directories no longer mis-link
+- **Incremental enrich** -- unchanged nodes are skipped on re-embed (content hash per row), embeddings for deleted nodes are pruned; `--full` forces a complete re-embed. Cheap enough to run after every rebuild
+- **Viz drill-down** -- the aggregated overview (>5,000 nodes) links one full-featured subgraph page per community under `graph_communities/`; double-click a community to open it
+- **`paragraph serve`** -- proper CLI entry for the MCP server, which gains `retrieve` (semantic, via vectors.db + ollama) and `insights` (architectural analysis) tools; `mcp` dependency pinned `<2` (2.0 removed the decorator API)
+- **Trends** -- every rebuild records a structural snapshot to `graphify-out/.paragraph_history.jsonl`; `paragraph analyze` renders deltas (nodes/edges/communities/cycles/orphans) with warnings when cycles or orphans grow
+- **Retrieval eval kit** -- `docs/RETRIEVAL_EVAL.md` (protocol + labeling discipline) and `docs/examples/retrieval_eval.json` (template) so `paragraph retrieve --eval` is usable outside ParaNote
+- **CI** -- GitHub Actions test matrix on Python 3.10-3.13
+
 - **Persistent community labels** -- Claude-written labels are stored in `graph.json` (`graph.community_labels`) and survive the skill's temp-file cleanup; LLM-free rebuilds (`update`, `watch`, `cluster-only`) carry labels across re-clustering by member overlap (`cluster.carry_over_labels`) instead of resetting to "Community N", falling back to deterministic member-based names
 - **`paragraph analyze`** -- architectural analysis to `graphify-out/GRAPH_INSIGHTS.md`: per-community summaries (size, cohesion, isolation, dominant directories), hub/bridge/orphan node classification, cross-community dependency cycles (new `paragraph/insights.py`)
 - **`paragraph enrich`** -- the vectors.db producer, ported from PARA_Note's `graphify-enrich.py`: source bodies on code nodes, timestamps, embeddings via local ollama (new `paragraph/enrich.py`). `paragraph retrieve` now works end-to-end

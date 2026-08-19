@@ -118,6 +118,7 @@ const nodesDS = new vis.DataSet(RAW_NODES.map(n => ({{
   font: n.font, title: n.title,
   _community: n.community, _community_name: n.community_name,
   _source_file: n.source_file, _file_type: n.file_type, _degree: n.degree,
+  _href: n.href || null,
 }})));
 
 const edgesDS = new vis.DataSet(RAW_EDGES.map((e, i) => ({{
@@ -158,6 +159,13 @@ const network = new vis.Network(container, {{ nodes: nodesDS, edges: edgesDS }},
 
 network.once('stabilizationIterationsDone', () => {{
   network.setOptions({{ physics: {{ enabled: false }} }});
+}});
+
+// Drill-down: double-click a node that carries a page link (aggregated view)
+network.on('doubleClick', params => {{
+  if (!params.nodes.length) return;
+  const n = nodesDS.get(params.nodes[0]);
+  if (n && n._href) window.location = n._href;
 }});
 
 function showInfo(nodeId) {{
@@ -345,6 +353,7 @@ def to_html(
     output_path: str,
     community_labels: dict[int, str] | None = None,
     member_counts: dict[int, int] | None = None,
+    back_href: str | None = None,
 ) -> None:
     """Generate an interactive vis.js HTML visualization of the graph.
 
@@ -381,7 +390,7 @@ def to_html(
             size = 10 + 30 * (deg / max_deg)
             # Only show label for high-degree nodes by default; others show on hover
             font_size = 12 if deg >= max_deg * 0.15 else 0
-        vis_nodes.append({
+        vis_node = {
             "id": node_id,
             "label": label,
             "color": {"background": color, "border": color, "highlight": {"background": "#ffffff", "border": color}},
@@ -393,7 +402,10 @@ def to_html(
             "source_file": sanitize_label(str(data.get("source_file") or "")),
             "file_type": data.get("file_type", ""),
             "degree": deg,
-        })
+        }
+        if data.get("href"):
+            vis_node["href"] = str(data["href"])
+        vis_nodes.append(vis_node)
 
     # Build edges list
     vis_edges = []
@@ -430,6 +442,12 @@ def to_html(
     title = _html.escape(sanitize_label(str(output_path)))
     stats = f"{G.number_of_nodes()} nodes &middot; {G.number_of_edges()} edges &middot; {len(communities)} communities"
 
+    back_link = (
+
+        f'<a href="{_html.escape(back_href)}" style="position:absolute;top:10px;left:10px;z-index:10;color:#8ab4f8;font-size:13px;text-decoration:none;background:#1a1a2e;padding:6px 10px;border-radius:6px;border:1px solid #2a2a4e">&#8592; Overview</a>\n'
+
+        if back_href else "")
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -439,7 +457,7 @@ def to_html(
 {_html_styles()}
 </head>
 <body>
-<div id="graph"></div>
+{back_link}<div id="graph"></div>
 <div id="sidebar">
   <div id="search-wrap">
     <input id="search" type="text" placeholder="Search nodes..." autocomplete="off">
@@ -505,10 +523,32 @@ def to_html_auto(
         return "full"
     meta = build_meta_graph(G, communities, community_labels)
     if 1 < meta.number_of_nodes() <= MAX_NODES_FOR_VIZ:
+        # Drill-down pages: one full-featured viz per community, linked from
+        # the overview (double-click a community node to open it).
+        out_file = Path(output_path)
+        pages_dir = out_file.parent / "graph_communities"
+        pages_dir.mkdir(parents=True, exist_ok=True)
+        for stale in pages_dir.glob("community_*.html"):
+            stale.unlink()
+        labels = community_labels or {}
+        pages = 0
+        for cid, members in communities.items():
+            if not 1 < len(members) <= MAX_NODES_FOR_VIZ:
+                continue
+            page = pages_dir / f"community_{cid}.html"
+            to_html(G.subgraph(members).copy(), {cid: list(members)}, str(page),
+                    community_labels={cid: labels.get(cid, f"Community {cid}")},
+                    back_href=f"../{out_file.name}")
+            meta.nodes[str(cid)]["href"] = f"graph_communities/{page.name}"
+            pages += 1
+
         meta_communities = {cid: [str(cid)] for cid in communities}
         member_counts = {cid: len(members) for cid, members in communities.items()}
         to_html(meta, meta_communities, output_path,
                 community_labels=community_labels, member_counts=member_counts)
+        if pages:
+            print(f"[paragraph] {pages} community drill-down pages in {pages_dir}/ "
+                  "(double-click a community in the overview)")
         return "aggregated"
     stale = Path(output_path)
     if stale.exists():

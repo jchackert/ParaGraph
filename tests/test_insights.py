@@ -80,3 +80,46 @@ def test_insights_markdown_renders():
     assert "## Structural roles" in md
     assert "## Cross-community dependency cycles" in md
     assert "Area 0" in md
+
+
+def test_record_history_and_trends(tmp_path):
+    from paragraph.insights import record_history, load_history, trends_section
+    G = make_graph()
+    communities = cluster(G)
+    snap1 = record_history(tmp_path, G, communities)
+    assert snap1["nodes"] == G.number_of_nodes()
+    # identical rebuild -> no duplicate entry
+    record_history(tmp_path, G, communities)
+    assert len(load_history(tmp_path)) == 1
+    # grown graph -> new entry, trends render with deltas
+    G.add_node("newnode", label="newnode")
+    communities2 = dict(communities)
+    communities2[max(communities2) + 1] = ["newnode"]
+    record_history(tmp_path, G, communities2)
+    history = load_history(tmp_path)
+    assert len(history) == 2
+    lines = trends_section(history)
+    assert any("## Trends" in l for l in lines)
+    assert any("| Nodes |" in l and "+1" in l for l in lines)
+    # orphan increase produces a warning
+    assert any("Orphan" in l and "Warning" in l for l in lines)
+
+
+def test_trends_absent_with_single_snapshot(tmp_path):
+    from paragraph.insights import record_history, load_history, trends_section
+    G = make_graph()
+    communities = cluster(G)
+    record_history(tmp_path, G, communities)
+    assert trends_section(load_history(tmp_path)) == []
+
+
+def test_insights_markdown_includes_trends(tmp_path):
+    from paragraph.insights import record_history, load_history
+    G = make_graph()
+    communities = cluster(G)
+    record_history(tmp_path, G, communities)
+    G.add_node("late", label="late")
+    c2 = dict(communities); c2[max(c2) + 1] = ["late"]
+    record_history(tmp_path, G, c2)
+    md = insights_markdown(G, c2, history=load_history(tmp_path))
+    assert "## Trends" in md

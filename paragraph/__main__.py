@@ -315,10 +315,12 @@ def main() -> None:
         print("  cluster-only <path>     rerun clustering on an existing graph.json and regenerate report")
         print("  analyze [path]          architectural analysis: community summaries, hubs/bridges/orphans,")
         print("                          cross-community dependency cycles -> graphify-out/GRAPH_INSIGHTS.md")
+        print("  serve [path|graph.json] start the MCP stdio server (query_graph, retrieve, insights, ...)")
         print("  enrich [path]           add source bodies + timestamps to graph.json and build vectors.db")
         print("    --bodies-only           skip the embedding step (no ollama needed)")
         print("    --embed-only            skip bodies/timestamps, just (re)embed")
         print("    --stats                 report current enrichment state")
+        print("    --full                  re-embed everything (default skips unchanged nodes)")
         print("    --model <name>          embedding model (default nomic-embed-text)")
         print("  query \"<question>\"       BFS traversal of graph.json for a question")
         print("    --dfs                   use depth-first instead of breadth-first")
@@ -591,7 +593,7 @@ def main() -> None:
             sys.exit(1)
         from networkx.readwrite import json_graph as _jg
         from paragraph.cluster import score_all
-        from paragraph.insights import insights_markdown
+        from paragraph.insights import insights_markdown, load_history, record_history
         data = json.loads(graph_json.read_text(encoding="utf-8"))
         try:
             G = _jg.node_link_graph(data, edges="links")
@@ -611,16 +613,27 @@ def main() -> None:
             if str(k).lstrip("-").isdigit()
         }
         cohesion = score_all(G, communities)
-        md = insights_markdown(G, communities, cohesion, labels or None)
+        out_dir = watch_path / "graphify-out"
+        record_history(out_dir, G, communities)
+        md = insights_markdown(G, communities, cohesion, labels or None,
+                               history=load_history(out_dir))
         out_path = watch_path / "graphify-out" / "GRAPH_INSIGHTS.md"
         out_path.write_text(md, encoding="utf-8")
         print(md)
         print(f"Written to {out_path}")
 
+    elif cmd == "serve":
+        graph_arg = sys.argv[2] if len(sys.argv) > 2 else "graphify-out/graph.json"
+        graph_path = Path(graph_arg)
+        if graph_path.is_dir():
+            graph_path = graph_path / "graphify-out" / "graph.json"
+        from paragraph.serve import serve as _serve
+        _serve(str(graph_path))
+
     elif cmd == "enrich":
         args = sys.argv[2:]
         target = Path(".")
-        bodies_only = embed_only = stats_only = False
+        bodies_only = embed_only = stats_only = full = False
         model = "nomic-embed-text"
         i = 0
         while i < len(args):
@@ -630,6 +643,8 @@ def main() -> None:
                 embed_only = True; i += 1
             elif args[i] == "--stats":
                 stats_only = True; i += 1
+            elif args[i] == "--full":
+                full = True; i += 1
             elif args[i] == "--model" and i + 1 < len(args):
                 model = args[i + 1]; i += 2
             elif not args[i].startswith("--"):
@@ -638,7 +653,7 @@ def main() -> None:
                 i += 1
         from paragraph.enrich import run as _run_enrich
         sys.exit(_run_enrich(target, bodies_only=bodies_only, embed_only=embed_only,
-                             stats_only=stats_only, model=model))
+                             stats_only=stats_only, full=full, model=model))
 
     elif cmd == "cluster-only":
         watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")
@@ -687,6 +702,8 @@ def main() -> None:
                     root_label(watch_path), out_dir=out),
                 encoding="utf-8")
         to_json(G, communities, str(out / "graph.json"), community_labels=labels)
+        from paragraph.insights import record_history
+        record_history(out, G, communities)
         viz = to_html_auto(G, communities, str(out / "graph.html"), community_labels=labels or None)
         if viz == "aggregated":
             print("Graph too large for full viz — graph.html shows the aggregated community view.")
