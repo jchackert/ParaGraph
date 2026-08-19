@@ -254,3 +254,19 @@ def test_to_html_auto_collapses_unconnected_singletons(monkeypatch):
         # connected communities still get drill-down pages
         pages = list((Path(tmp) / "graph_communities").glob("community_*.html"))
         assert len(pages) == 2
+
+
+def test_full_viz_clears_stale_drilldown_pages(monkeypatch):
+    """Graph shrinking back under the ceiling must remove old aggregated pages."""
+    import paragraph.export as export_mod
+    G = make_graph()
+    communities = cluster(G)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "graph.html"
+        monkeypatch.setattr(export_mod, "MAX_NODES_FOR_VIZ", len(communities))
+        assert export_mod.to_html_auto(G, communities, str(out)) == "aggregated"
+        pages_dir = Path(tmp) / "graph_communities"
+        assert list(pages_dir.glob("community_*.html"))
+        monkeypatch.setattr(export_mod, "MAX_NODES_FOR_VIZ", 5000)
+        assert export_mod.to_html_auto(G, communities, str(out)) == "full"
+        assert not pages_dir.exists(), "stale drill-down pages must be cleared"

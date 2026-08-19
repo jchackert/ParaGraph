@@ -21,9 +21,9 @@
 
 - **Path-based observation linking** -- `ingest-claude-mem` matches observation file paths against node `source_file` (exact, then unambiguous suffix) before falling back to filename stems; same-named files in different directories no longer mis-link
 - **Incremental enrich** -- unchanged nodes are skipped on re-embed (content hash per row), embeddings for deleted nodes are pruned; `--full` forces a complete re-embed. Cheap enough to run after every rebuild
-- **Viz drill-down** -- the aggregated overview (>5,000 nodes) links one full-featured subgraph page per community under `graph_communities/`; double-click a community to open it
+- **Viz drill-down** -- the aggregated overview (>5,000 nodes) links one full-featured subgraph page per community under `graph_communities/`; double-click a community to open it. When a graph drops back under the ceiling, the full/skipped viz paths clear stale drill-down pages
 - **`paragraph serve`** -- proper CLI entry for the MCP server, which gains `retrieve` (semantic, via vectors.db + ollama) and `insights` (architectural analysis) tools; `mcp` dependency pinned `<2` (2.0 removed the decorator API)
-- **Trends** -- every rebuild records a structural snapshot to `graphify-out/.paragraph_history.jsonl`; `paragraph analyze` renders deltas (nodes/edges/communities/cycles/orphans) with warnings when cycles or orphans grow
+- **Trends** -- every rebuild records a structural snapshot to `graphify-out/.paragraph_history.jsonl`; `paragraph analyze` renders deltas (nodes/edges/communities/cycles/orphans) with warnings when cycles or orphans grow. Snapshots within a 30-minute window coalesce into one row, so multi-step pipelines (update -> ingest -> cluster-only) record only the settled final state
 - **Retrieval eval kit** -- `docs/RETRIEVAL_EVAL.md` (protocol + labeling discipline) and `docs/examples/retrieval_eval.json` (template) so `paragraph retrieve --eval` is usable outside ParaNote
 - **CI** -- GitHub Actions test matrix on Python 3.10-3.13
 

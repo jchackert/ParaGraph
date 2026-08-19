@@ -780,6 +780,19 @@ def to_html(
 generate_html = to_html
 
 
+def _clear_drilldown_pages(out_dir: Path) -> None:
+    """Remove community drill-down pages left by a previous aggregated build."""
+    pages_dir = Path(out_dir) / "graph_communities"
+    if not pages_dir.is_dir():
+        return
+    for page in pages_dir.glob("community_*.html"):
+        page.unlink()
+    try:
+        pages_dir.rmdir()  # only removes if now empty
+    except OSError:
+        pass
+
+
 def build_meta_graph(G: nx.Graph, communities: dict[int, list[str]],
                      community_labels: dict[int, str] | None = None) -> nx.Graph:
     """Collapse G to one node per community, edges weighted by cross-community edge counts."""
@@ -815,6 +828,9 @@ def to_html_auto(
     """
     if G.number_of_nodes() <= MAX_NODES_FOR_VIZ:
         to_html(G, communities, output_path, community_labels=community_labels)
+        # The full viz owns the page; drill-down pages from a previous
+        # aggregated build would go stale and mislead.
+        _clear_drilldown_pages(Path(output_path).parent)
         return "full"
     # Communities whose members are all disconnected (orphan content) render
     # as one collapsed meta-node, not a ring of identical dots.
@@ -868,6 +884,7 @@ def to_html_auto(
     stale = Path(output_path)
     if stale.exists():
         stale.unlink()
+    _clear_drilldown_pages(stale.parent)
     return "skipped"
 
 def push_to_neo4j(

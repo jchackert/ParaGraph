@@ -160,14 +160,26 @@ def community_cycles(
 # Rebuild history — powers the Trends section
 # ---------------------------------------------------------------------------
 
+# Snapshots written within this window replace the previous one instead of
+# appending: a multi-step pipeline (update -> ingest -> connect-chunks ->
+# cluster-only) records several times minutes apart, and only the settled
+# final state should count as "this rebuild" in trends.
+HISTORY_COALESCE_SECONDS = 30 * 60
+
+
 def record_history(out_dir: Path, G: nx.Graph,
-                   communities: dict[int, list[str]]) -> dict:
-    """Append a structural snapshot of this rebuild to the history sidecar.
+                   communities: dict[int, list[str]],
+                   *, coalesce_seconds: int = HISTORY_COALESCE_SECONDS) -> dict:
+    """Record a structural snapshot of this rebuild in the history sidecar.
 
     Called by every graph writer (skill, watch, cluster-only, analyze) so
     trends compare rebuild-to-rebuild regardless of which path ran.
-    Structurally identical consecutive snapshots are not duplicated.
+    A snapshot arriving within coalesce_seconds of the previous one
+    REPLACES it (mid-pipeline states settle into one row); structurally
+    identical consecutive snapshots are not duplicated.
     """
+    import calendar
+
     degree = dict(G.degree())
     snapshot = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -180,11 +192,26 @@ def record_history(out_dir: Path, G: nx.Graph,
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     history = load_history(out_dir)
+
+    if history and coalesce_seconds > 0:
+        try:
+            last_t = calendar.timegm(time.strptime(history[-1]["ts"], "%Y-%m-%dT%H:%M:%SZ"))
+        except (KeyError, ValueError):
+            last_t = None
+        if last_t is not None and 0 <= time.time() - last_t < coalesce_seconds:
+            history = history[:-1]  # still settling — replace the in-flight row
+
     if history and all(history[-1].get(k) == v for k, v in snapshot.items() if k != "ts"):
-        return history[-1]  # structurally unchanged — keep the earlier timestamp
-    with open(out_dir / HISTORY_FILENAME, "a", encoding="utf-8") as f:
-        f.write(json.dumps(snapshot) + "\n")
-    return snapshot
+        # structurally unchanged — keep the earlier timestamp, but persist any
+        # coalescing that just happened
+        result = history[-1]
+    else:
+        history.append(snapshot)
+        result = snapshot
+    with open(out_dir / HISTORY_FILENAME, "w", encoding="utf-8") as f:
+        for entry in history:
+            f.write(json.dumps(entry) + "\n")
+    return result
 
 
 def load_history(out_dir: Path) -> list[dict]:
