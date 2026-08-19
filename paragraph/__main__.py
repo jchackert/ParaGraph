@@ -316,6 +316,8 @@ def main() -> None:
         print("  connect-chunks [path]   link orphaned doc/rationale chunks to per-file parent nodes")
         print("  analyze [path]          architectural analysis: community summaries, hubs/bridges/orphans,")
         print("                          cross-community dependency cycles -> graphify-out/GRAPH_INSIGHTS.md")
+        print("  advise [path]           Swift coding-standards advice from the graph -> graphify-out/ADVICE.md")
+        print("                          (Swift nodes only — Python/other tooling code is excluded)")
         print("  serve [path|graph.json] start the MCP stdio server (query_graph, retrieve, insights, ...)")
         print("  enrich [path]           add source bodies + timestamps to graph.json and build vectors.db")
         print("    --bodies-only           skip the embedding step (no ollama needed)")
@@ -622,6 +624,11 @@ def main() -> None:
         out_path.write_text(md, encoding="utf-8")
         print(md)
         print(f"Written to {out_path}")
+
+    elif cmd == "advise":
+        watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")
+        from paragraph.advise import run as _run_advise
+        sys.exit(_run_advise(watch_path))
 
     elif cmd == "connect-chunks":
         watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")

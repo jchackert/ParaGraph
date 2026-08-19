@@ -1,0 +1,215 @@
+{
+  "name": "swift",
+  "description": "Curated Swift coding-standards pack for the paragraph advisor. Statements are paraphrased summaries; follow the citations for the authoritative text.",
+  "rules": [
+    {
+      "id": "SWIFT-SRP-01",
+      "title": "Keep each type focused on one responsibility",
+      "statement": "A type that accumulates dozens of methods and nested members is doing several jobs at once. Split it along its natural seams — parsing, persistence, formatting, coordination — so each piece can be named, understood, and changed independently.",
+      "rationale": "Small, single-purpose types localize change: a bug fix in one concern cannot silently break another, and each piece can be tested in isolation.",
+      "applies_to": "massive_type",
+      "snippet_bad": "final class NoteStore {\n    func load() -> [Note] { /* disk IO */ [] }\n    func save(_ notes: [Note]) { /* disk IO */ }\n    func render(_ note: Note) -> AttributedString { AttributedString(note.body) }\n    func sync() async { /* network */ }\n    func exportPDF(_ note: Note) -> Data { Data() }\n    // ...30 more methods spanning four concerns\n}",
+      "snippet_good": "struct NoteRepository {\n    func load() -> [Note] { [] }\n    func save(_ notes: [Note]) { }\n}\n\nstruct NoteRenderer {\n    func render(_ note: Note) -> AttributedString { AttributedString(note.body) }\n}\n\nstruct NoteSyncService {\n    func sync() async { }\n}",
+      "citations": [
+        {"title": "App Architecture", "source": "objc.io", "url": "https://www.objc.io/books/app-architecture/"},
+        {"title": "Avoiding Massive SwiftUI Views", "source": "Swift by Sundell", "url": "https://www.swiftbysundell.com/articles/avoiding-massive-swiftui-views/"}
+      ]
+    },
+    {
+      "id": "SWIFT-SRP-02",
+      "title": "Break up god objects",
+      "statement": "A node that half the graph touches is a god object: every feature routes through it, so every change risks every feature. Carve it into narrower services with explicit interfaces and let callers depend only on the slice they use.",
+      "rationale": "God objects concentrate coupling and merge conflicts; extracting focused collaborators shrinks the blast radius of any change.",
+      "applies_to": "god_object",
+      "snippet_bad": "final class AppManager {\n    static let shared = AppManager()\n    var session: Session?\n    var notes: [Note] = []\n    var theme: Theme = .system\n    func login(_ user: String) { }\n    func fetchNotes() async { }\n    func applyTheme() { }\n    // touched by nearly every file in the app\n}",
+      "snippet_good": "struct SessionService {\n    func login(_ user: String) async throws -> Session { Session() }\n}\n\nstruct NoteService {\n    func fetchNotes() async throws -> [Note] { [] }\n}\n\nstruct ThemeStore {\n    var theme: Theme = .system\n}",
+      "citations": [
+        {"title": "App Architecture", "source": "objc.io", "url": "https://www.objc.io/books/app-architecture/"},
+        {"title": "Introducing MVVM into your SwiftUI project", "source": "Hacking with Swift", "url": "https://www.hackingwithswift.com/books/ios-swiftui/introducing-mvvm-into-your-swiftui-project"}
+      ]
+    },
+    {
+      "id": "SWIFT-MVVM-01",
+      "title": "Keep view models lean",
+      "statement": "A view model should translate between a view and the domain, not absorb the domain. When one view model grows past a screenful of methods, move business rules into services and models, leaving the view model with presentation state and user-intent handling only.",
+      "rationale": "Lean view models keep the presentation layer testable and stop the 'massive view controller' problem from reappearing under a new name.",
+      "applies_to": "massive_view_model",
+      "snippet_bad": "@Observable final class CaptureViewModel {\n    var drafts: [Draft] = []\n    func parseMarkdown(_ s: String) -> Draft { Draft() }\n    func persist(_ d: Draft) { /* SQL here */ }\n    func uploadAttachments(_ d: Draft) async { /* URLSession here */ }\n    func scoreRelevance(_ d: Draft) -> Double { 0 }\n    // ...20 more methods of business logic\n}",
+      "snippet_good": "@Observable final class CaptureViewModel {\n    private let drafts: DraftService\n    var items: [Draft] = []\n\n    init(drafts: DraftService) { self.drafts = drafts }\n\n    func save(_ text: String) async {\n        items.append(await drafts.capture(text))\n    }\n}",
+      "citations": [
+        {"title": "Introduction to MVVM", "source": "objc.io", "url": "https://www.objc.io/issues/13-architecture/mvvm/"},
+        {"title": "Different flavors of view models in Swift", "source": "Swift by Sundell", "url": "https://www.swiftbysundell.com/articles/different-flavors-of-view-models-in-swift/"}
+      ]
+    },
+    {
+      "id": "SWIFT-MVVM-02",
+      "title": "Route view actions through the view model",
+      "statement": "Views should express user intent to their view model, never call services directly. A view that talks straight to a network or persistence service bypasses the layer that exists to make that interaction observable and testable.",
+      "rationale": "When every side effect flows through the view model, previews and tests can substitute fakes at one seam instead of stubbing services inside view code.",
+      "applies_to": "view_skips_viewmodel",
+      "snippet_bad": "struct InboxView: View {\n    var body: some View {\n        List(items) { row in Text(row.title) }\n            .task {\n                // View reaches straight into the service layer\n                items = try! await SyncService.shared.fetchInbox()\n            }\n    }\n    @State private var items: [Item] = []\n}",
+      "snippet_good": "struct InboxView: View {\n    @State var model: InboxViewModel\n\n    var body: some View {\n        List(model.items) { row in Text(row.title) }\n            .task { await model.refresh() }\n    }\n}",
+      "citations": [
+        {"title": "Introducing MVVM into your SwiftUI project", "source": "Hacking with Swift", "url": "https://www.hackingwithswift.com/books/ios-swiftui/introducing-mvvm-into-your-swiftui-project"},
+        {"title": "Introduction to MVVM", "source": "objc.io", "url": "https://www.objc.io/issues/13-architecture/mvvm/"}
+      ]
+    },
+    {
+      "id": "SWIFT-ARCH-01",
+      "title": "Point dependencies down the layer stack",
+      "statement": "Dependencies must flow in one direction: views depend on view models, view models on services, services on models. A model that imports SwiftUI or a service that reaches into a view inverts the stack and welds the domain to the UI framework.",
+      "rationale": "One-way layering keeps lower layers reusable and compilable without the UI, and makes the dependency graph predictable for anyone reading the code.",
+      "applies_to": "layering_violation",
+      "snippet_bad": "import SwiftUI\n\nstruct Invoice {\n    var total: Decimal\n    // Model reaching up into the view layer\n    func badgeColor(in view: InvoiceListView) -> Color {\n        total > 0 ? view.theme.accent : .gray\n    }\n}",
+      "snippet_good": "struct Invoice {\n    var total: Decimal\n    var isOutstanding: Bool { total > 0 }\n}\n\n// The VIEW decides presentation from model facts:\nstruct InvoiceBadge: View {\n    let invoice: Invoice\n    var body: some View {\n        Circle().fill(invoice.isOutstanding ? Color.accentColor : .gray)\n    }\n}",
+      "citations": [
+        {"title": "App Architecture", "source": "objc.io", "url": "https://www.objc.io/books/app-architecture/"},
+        {"title": "Dependencies", "source": "Point-Free", "url": "https://www.pointfree.co/collections/dependencies"}
+      ]
+    },
+    {
+      "id": "SWIFT-DI-01",
+      "title": "Inject dependencies instead of reaching for singletons",
+      "statement": "A `.shared` instance referenced from many call sites is a hidden global: its consumers cannot be tested without it and its lifetime is invisible. Pass dependencies in through initializers (or an environment/dependency container) so each consumer states what it needs.",
+      "rationale": "Injection makes dependencies explicit and swappable, which is what unit tests, previews, and feature isolation all require.",
+      "applies_to": "singleton_fanin",
+      "snippet_bad": "final class ProfileViewModel {\n    func load() async {\n        // Hidden global dependencies, untestable\n        let user = await APIClient.shared.currentUser()\n        AnalyticsTracker.shared.track(\"profile_loaded\")\n        self.name = user.name\n    }\n    var name = \"\"\n}",
+      "snippet_good": "final class ProfileViewModel {\n    private let api: any UserFetching\n    private let analytics: any AnalyticsTracking\n\n    init(api: any UserFetching, analytics: any AnalyticsTracking) {\n        self.api = api\n        self.analytics = analytics\n    }\n\n    var name = \"\"\n}",
+      "citations": [
+        {"title": "Avoiding singletons in Swift", "source": "Swift by Sundell", "url": "https://www.swiftbysundell.com/articles/avoiding-singletons-in-swift/"},
+        {"title": "Dependency Injection in Swift", "source": "SwiftLee", "url": "https://www.avanderlee.com/swift/dependency-injection/"},
+        {"title": "Dependencies", "source": "Point-Free", "url": "https://www.pointfree.co/collections/dependencies"}
+      ]
+    },
+    {
+      "id": "SWIFT-ERR-01",
+      "title": "Do not ship force operations (try!, as!)",
+      "statement": "Every `try!` and `as!` is a crash waiting for the input you did not anticipate. Convert failures into thrown errors, optional casts with graceful fallbacks, or precondition checks with explicit messages — reserve force forms for provably-safe cases like compiled-in resources.",
+      "rationale": "Forced operations turn recoverable conditions into production crashes and hide the failure path from the type system.",
+      "applies_to": "force_operations",
+      "snippet_bad": "func loadSettings(from data: Data) -> Settings {\n    let json = try! JSONSerialization.jsonObject(with: data)\n    let dict = json as! [String: Any]\n    let theme = dict[\"theme\"] as! String\n    return Settings(theme: theme)\n}",
+      "snippet_good": "func loadSettings(from data: Data) throws -> Settings {\n    let decoded = try JSONDecoder().decode(Settings.self, from: data)\n    return decoded\n}\n\n// Caller handles the failure path explicitly:\nlet settings = (try? loadSettings(from: data)) ?? .default",
+      "citations": [
+        {"title": "Error Handling — The Swift Programming Language", "source": "Apple", "url": "https://docs.swift.org/swift-book/documentation/the-swift-programming-language/errorhandling/"},
+        {"title": "Handling non-optional optionals in Swift", "source": "Swift by Sundell", "url": "https://www.swiftbysundell.com/articles/handling-non-optional-optionals-in-swift/"}
+      ]
+    },
+    {
+      "id": "SWIFT-CONC-01",
+      "title": "Use @MainActor instead of DispatchQueue.main in observable types",
+      "statement": "Observable state that drives SwiftUI must mutate on the main actor, and hopping there with `DispatchQueue.main.async` is unchecked by the compiler. Annotate the type (or its UI-facing members) with `@MainActor` so isolation is verified at compile time and the manual hops disappear.",
+      "rationale": "@MainActor turns a runtime threading convention into a compiler guarantee, eliminating a whole class of data races on UI state.",
+      "applies_to": "main_queue_in_observable",
+      "snippet_bad": "final class FeedViewModel: ObservableObject {\n    @Published var posts: [Post] = []\n\n    func refresh() {\n        Task.detached {\n            let fresh = await API.fetchPosts()\n            DispatchQueue.main.async { self.posts = fresh }\n        }\n    }\n}",
+      "snippet_good": "@MainActor\n@Observable final class FeedViewModel {\n    var posts: [Post] = []\n\n    func refresh() async {\n        posts = await API.fetchPosts()\n    }\n}",
+      "citations": [
+        {"title": "MainActor usage in Swift explained", "source": "SwiftLee", "url": "https://www.avanderlee.com/swift/mainactor-dispatch-main-thread/"},
+        {"title": "MainActor", "source": "Apple Developer Documentation", "url": "https://developer.apple.com/documentation/swift/mainactor"},
+        {"title": "Protect mutable state with Swift actors (WWDC21)", "source": "Apple WWDC", "url": "https://developer.apple.com/videos/play/wwdc2021/10133/"}
+      ]
+    },
+    {
+      "id": "SWIFT-CONC-02",
+      "title": "Protect shared mutable state with actors",
+      "statement": "When several tasks read and write the same state, wrap that state in an actor rather than guarding it with locks or serial queues. The actor serializes access for you and the compiler rejects unsynchronized touches from outside.",
+      "rationale": "Actors move data-race prevention from convention to the type system, which locks and queues cannot do.",
+      "applies_to": "general",
+      "snippet_bad": "final class DownloadCache {\n    private var entries: [URL: Data] = [:]\n    private let queue = DispatchQueue(label: \"cache\")\n\n    func store(_ data: Data, for url: URL) {\n        queue.async { self.entries[url] = data }\n    }\n}",
+      "snippet_good": "actor DownloadCache {\n    private var entries: [URL: Data] = [:]\n\n    func store(_ data: Data, for url: URL) {\n        entries[url] = data\n    }\n\n    func data(for url: URL) -> Data? { entries[url] }\n}",
+      "citations": [
+        {"title": "Protect mutable state with Swift actors (WWDC21)", "source": "Apple WWDC", "url": "https://developer.apple.com/videos/play/wwdc2021/10133/"},
+        {"title": "Concurrency — The Swift Programming Language", "source": "Apple", "url": "https://docs.swift.org/swift-book/documentation/the-swift-programming-language/concurrency/"}
+      ]
+    },
+    {
+      "id": "SWIFT-VAL-01",
+      "title": "Prefer structs and value semantics by default",
+      "statement": "Reach for a struct first and use a class only when identity, shared mutable state, or Objective-C interop genuinely requires it. Value types copy on assignment, so distant code cannot mutate your data behind your back.",
+      "rationale": "Value semantics remove aliasing bugs and make data safe to pass across concurrency domains.",
+      "applies_to": "general",
+      "snippet_bad": "final class SearchFilters {\n    var query = \"\"\n    var tags: [String] = []\n}\n// Two screens share one instance; editing in one\n// silently changes the other.\nlet a = SearchFilters()\nlet b = a\nb.query = \"swift\"   // 'a' changed too",
+      "snippet_good": "struct SearchFilters: Equatable {\n    var query = \"\"\n    var tags: [String] = []\n}\n\nvar a = SearchFilters()\nvar b = a\nb.query = \"swift\"   // 'a' is untouched",
+      "citations": [
+        {"title": "Choosing Between Structures and Classes", "source": "Apple Developer Documentation", "url": "https://developer.apple.com/documentation/swift/choosing-between-structures-and-classes"},
+        {"title": "Structures and Classes — The Swift Programming Language", "source": "Apple", "url": "https://docs.swift.org/swift-book/documentation/the-swift-programming-language/classesandstructures/"}
+      ]
+    },
+    {
+      "id": "SWIFT-API-01",
+      "title": "Name APIs for clarity at the point of use",
+      "statement": "Design names so the call site reads as a sentence: include the words needed to avoid ambiguity, omit the ones that merely repeat type information. Judge every signature by how it looks where it is called, not where it is declared.",
+      "rationale": "Code is read at call sites far more often than at declarations; clear use-site grammar prevents misuse without documentation.",
+      "applies_to": "general",
+      "snippet_bad": "// Needless words repeat the types; ambiguous at the call site\nfunc removeObject(object: Element, atIndex index: Int) { }\n\nlist.removeObject(object: item, atIndex: 3)",
+      "snippet_good": "func remove(_ element: Element, at index: Int) { }\n\nlist.remove(item, at: 3)   // reads as a sentence",
+      "citations": [
+        {"title": "Swift API Design Guidelines", "source": "swift.org", "url": "https://www.swift.org/documentation/api-design-guidelines/"}
+      ]
+    },
+    {
+      "id": "SWIFT-API-02",
+      "title": "Name methods to reflect side effects and mutation",
+      "statement": "Use imperative verbs for mutating operations and noun or participle forms for their non-mutating counterparts — `sort()` mutates in place while `sorted()` returns a copy. The name alone should tell a reader whether the receiver changes.",
+      "rationale": "Consistent mutating/non-mutating pairs let readers reason about state changes without opening the implementation.",
+      "applies_to": "general",
+      "snippet_bad": "extension Array where Element: Comparable {\n    // Sounds non-mutating, actually mutates in place\n    func sortedItems() -> [Element] { self.sorted() }\n    mutating func getSorted() { self.sort() }\n}",
+      "snippet_good": "var scores = [3, 1, 2]\nscores.sort()              // imperative verb: mutates in place\nlet ranked = scores.sorted() // participle: returns a new value",
+      "citations": [
+        {"title": "Swift API Design Guidelines", "source": "swift.org", "url": "https://www.swift.org/documentation/api-design-guidelines/"}
+      ]
+    },
+    {
+      "id": "SWIFT-PROTO-01",
+      "title": "Abstract collaborators behind protocols for testability",
+      "statement": "Depend on a small protocol that describes the capability you need, not on the concrete type that happens to provide it. Tests and previews then supply lightweight conformances instead of spinning up real networking or persistence.",
+      "rationale": "Protocol seams are the cheapest way to make Swift code testable, and they keep call sites honest about which capabilities they actually use.",
+      "applies_to": "general",
+      "snippet_bad": "final class WeatherViewModel {\n    // Hard-wired to the real HTTP client\n    private let client = URLSessionWeatherClient()\n\n    func load(city: String) async throws {\n        report = try await client.fetchReport(city: city)\n    }\n    var report: Report?\n}",
+      "snippet_good": "protocol WeatherFetching {\n    func fetchReport(city: String) async throws -> Report\n}\n\nfinal class WeatherViewModel {\n    private let client: any WeatherFetching\n    init(client: any WeatherFetching) { self.client = client }\n    var report: Report?\n}",
+      "citations": [
+        {"title": "Protocol Witnesses", "source": "Point-Free", "url": "https://www.pointfree.co/collections/protocol-witnesses"},
+        {"title": "Protocol-Oriented Programming in Swift (WWDC15)", "source": "Apple WWDC", "url": "https://developer.apple.com/videos/play/wwdc2015/408/"}
+      ]
+    },
+    {
+      "id": "SWIFT-OBS-01",
+      "title": "Prefer the @Observable macro for new state models",
+      "statement": "For projects targeting iOS 17/macOS 14 and later, use the `@Observable` macro instead of `ObservableObject` with `@Published`. Observation tracks exactly which properties a view reads, so views re-render only when those properties change.",
+      "rationale": "Per-property tracking removes the over-invalidation that objectWillChange causes and deletes the @Published boilerplate.",
+      "applies_to": "general",
+      "snippet_bad": "final class LibraryModel: ObservableObject {\n    @Published var books: [Book] = []\n    @Published var filter = \"\"\n    @Published var isLoading = false\n    // Any change re-renders every observing view\n}",
+      "snippet_good": "@Observable final class LibraryModel {\n    var books: [Book] = []\n    var filter = \"\"\n    var isLoading = false\n    // Views re-render only for the properties they read\n}",
+      "citations": [
+        {"title": "Discover Observation in SwiftUI (WWDC23)", "source": "Apple WWDC", "url": "https://developer.apple.com/videos/play/wwdc2023/10149/"},
+        {"title": "Migrating from the Observable Object protocol to the Observable macro", "source": "Apple Developer Documentation", "url": "https://developer.apple.com/documentation/swiftui/migrating-from-the-observable-object-protocol-to-the-observable-macro"},
+        {"title": "Comparing @Observable to ObservableObjects", "source": "Donny Wals", "url": "https://www.donnywals.com/comparing-observable-to-observableobjects/"}
+      ]
+    },
+    {
+      "id": "SWIFT-SD-01",
+      "title": "Keep SwiftData models at the model layer",
+      "statement": "`@Model` classes are persistence entities; keep queries, predicates, and model-context work behind a repository or service instead of scattering them through views. Views should receive plain data or observed models, not compose fetch descriptors inline.",
+      "rationale": "Containing SwiftData behind one boundary keeps the schema evolvable and lets the rest of the app be tested without a model container.",
+      "applies_to": "general",
+      "snippet_bad": "struct NotesScreen: View {\n    @Environment(\\.modelContext) private var context\n    var body: some View {\n        Button(\"Purge\") {\n            // Persistence logic embedded in a view\n            let old = try! context.fetch(FetchDescriptor<Note>())\n            old.filter { $0.isArchived }.forEach { context.delete($0) }\n        }\n    }\n}",
+      "snippet_good": "struct NoteStore {\n    let context: ModelContext\n\n    func purgeArchived() throws {\n        let archived = try context.fetch(\n            FetchDescriptor<Note>(predicate: #Predicate { $0.isArchived })\n        )\n        archived.forEach(context.delete)\n    }\n}",
+      "citations": [
+        {"title": "SwiftData", "source": "Apple Developer Documentation", "url": "https://developer.apple.com/documentation/swiftdata"},
+        {"title": "SwiftData by Example", "source": "Hacking with Swift", "url": "https://www.hackingwithswift.com/quick-start/swiftdata"}
+      ]
+    },
+    {
+      "id": "SWIFT-ERR-02",
+      "title": "Model recoverable failures explicitly",
+      "statement": "Give failure paths first-class types: throw domain-specific errors or return `Result` values instead of returning nil, logging, and carrying on. A caller that can see which failures are possible can decide which ones to recover from.",
+      "rationale": "Explicit error types turn silent degradation into handled cases and make failure behavior part of the reviewed API surface.",
+      "applies_to": "general",
+      "snippet_bad": "func fetchProfile(id: String) async -> Profile? {\n    guard let url = URL(string: base + id) else { return nil }\n    guard let (data, _) = try? await URLSession.shared.data(from: url)\n    else { return nil }   // network vs decode vs bad id: all just nil\n    return try? JSONDecoder().decode(Profile.self, from: data)\n}",
+      "snippet_good": "enum ProfileError: Error { case badID, network(Error), decoding(Error) }\n\nfunc fetchProfile(id: String) async throws -> Profile {\n    guard let url = URL(string: base + id) else { throw ProfileError.badID }\n    let (data, _) = try await URLSession.shared.data(from: url)\n    do { return try JSONDecoder().decode(Profile.self, from: data) }\n    catch { throw ProfileError.decoding(error) }\n}",
+      "citations": [
+        {"title": "Error Handling — The Swift Programming Language", "source": "Apple", "url": "https://docs.swift.org/swift-book/documentation/the-swift-programming-language/errorhandling/"},
+        {"title": "The power of Result types in Swift", "source": "Swift by Sundell", "url": "https://www.swiftbysundell.com/articles/the-power-of-result-types-in-swift/"}
+      ]
+    }
+  ]
+}

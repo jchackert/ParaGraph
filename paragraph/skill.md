@@ -37,6 +37,7 @@ Turn any folder of files into a navigable knowledge graph with community detecti
 /paragraph path "AuthModule" "Database"                # shortest path between two concepts
 /paragraph explain "SwinTransformer"                   # plain-language explanation of a node
 /paragraph analyze                                     # architectural analysis → GRAPH_INSIGHTS.md
+/paragraph advise                                      # Swift coding-standards advice → ADVICE.md
 ```
 
 ## What paragraph is for
@@ -931,6 +932,18 @@ $(cat graphify-out/.paragraph_python) -m paragraph analyze INPUT_PATH
 ```
 
 It writes `graphify-out/GRAPH_INSIGHTS.md` with community summaries (size, cohesion, isolation, dominant directories), structural roles (hubs, bridges, orphans), and cross-community dependency cycles. After showing the table, add 2-3 sentences of your own interpretation: what the cycles mean for this codebase, which bridge nodes look risky, whether orphans are dead code.
+
+---
+
+## For /paragraph advise
+
+Run the CLI and show the user the output:
+
+```bash
+$(cat graphify-out/.paragraph_python) -m paragraph advise INPUT_PATH
+```
+
+It writes `graphify-out/ADVICE.md` — Swift-only coding-standards findings (massive view models, layering violations, views bypassing view models, singleton fan-in, god objects, force operations, main-queue hops in observable types) with Avoid/Prefer snippets and citations to Apple guidelines and community sources. Non-Swift tooling code (Python scripts etc.) is excluded automatically. Show the printed summary, then add 2-3 sentences of your own interpretation of the top findings: which are worth fixing first, whether a hot spot is one type or a repo-wide pattern, and which "Clean" rules confirm existing good practice.
 
 ---
 

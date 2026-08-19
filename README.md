@@ -12,7 +12,8 @@ Type `/paragraph` in Claude Code. It reads your files, builds a knowledge graph,
 - **Multimodal** -- code, PDFs, markdown, screenshots, diagrams, video, audio
 - **16 languages** via tree-sitter AST (Python, JS, TS, Go, Rust, Java, C, C++, Ruby, C#, Kotlin, Scala, PHP, Swift, Lua, Objective-C); other languages still get semantic extraction
 - **Community detection** -- Leiden/Louvain clustering identifies module boundaries, with meaningful names that survive rebuilds (Claude-written labels persist in graph.json; LLM-free rebuilds carry them over by member overlap)
-- **Architectural analysis** -- `paragraph analyze` reports community summaries, hubs/bridges/orphans, and cross-community dependency cycles
+- **Architectural analysis** -- `paragraph analyze` reports community summaries, hubs/bridges/orphans, and cross-community dependency cycles; graph.html adds a layered architecture view (dependency-direction swimlanes with violation highlighting), relation/confidence lenses, and blast-radius mode
+- **Swift standards advisor** -- `paragraph advise` checks Swift code (only Swift -- tooling scripts are excluded) against a 16-rule pack citing Apple's guidelines, WWDC sessions, and the Swift community canon, with Avoid/Prefer snippets in `ADVICE.md`
 - **Semantic retrieval** -- `paragraph enrich` builds a local vector store (ollama embeddings); `paragraph retrieve` is the eval-tuned read path
 - **71.5x token reduction** vs reading raw files
 

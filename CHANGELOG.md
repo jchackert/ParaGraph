@@ -2,6 +2,14 @@
 
 ## 0.2.0
 
+### Swift architecture visualization + standards advisor
+
+- **Shared layer classifier** (`paragraph/layers.py`) -- classifies nodes into view/viewmodel/service/model/core by directory and name signals; Python/shell tooling and docs are classified OUT of the Swift stack and exempt from all Swift analysis
+- **Layered architecture view** -- graph.html "Layers" toggle arranges nodes in swimlanes by layer with dependency direction flowing down; upward edges (a Model reaching into a View) render red with a violation count
+- **Lenses** -- live filters on edge relation (calls/imports/contains), confidence tier, and node file type
+- **Blast radius** -- arm the button, click a node: transitive dependents highlight by hop distance, everything else dims
+- **`paragraph advise`** -- Swift coding-standards advisor: 16-rule curated pack (`paragraph/standards/swift.json`) with paraphrased statements, original Avoid/Prefer snippets, and citations to Apple (Swift API Design Guidelines, Swift book, WWDC 2015/21/23) and community canon (Swift by Sundell, Hacking with Swift, SwiftLee, Donny Wals, Point-Free, objc.io; all 25 URLs link-checked). Eight detectors (massive types, god objects, lean-view-model, view-skips-viewmodel, layering violations, singleton fan-in, force operations, DispatchQueue.main in observables) run over the graph and emit `ADVICE.md` with EXTRACTED/INFERRED confidence per finding. Strictly Swift-gated: tooling code produces zero findings and the excluded count is reported. Also exposed as an `advise` MCP tool
+
 ### Graph hygiene (pollution cleanup)
 
 - **Fix: label dedup no longer collapses code across files** -- `deduplicate_by_label` scoped code nodes (and bare-callable labels like `main()`) to their `source_file`; merging every script's `main()`/`run()` into one node had corrupted god nodes and surprising-connection analysis (389 bad merges observed in a real corpus). Concept/document dedup across chunks unchanged

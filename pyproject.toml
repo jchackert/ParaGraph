@@ -68,4 +68,4 @@ where = ["."]
 include = ["paragraph*"]
 
 [tool.setuptools.package-data]
-paragraph = ["skill.md"]
+paragraph = ["skill.md", "standards/*.json"]

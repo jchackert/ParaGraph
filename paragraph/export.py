@@ -10,6 +10,7 @@ import networkx as nx
 from networkx.readwrite import json_graph
 from paragraph.security import sanitize_label
 from paragraph.analyze import _node_community_map
+from paragraph.layers import classify_layer, is_layer_violation, ALL_LAYERS
 
 def _strip_diacritics(text: str) -> str:
     import unicodedata
@@ -55,6 +56,17 @@ def _html_styles() -> str:
   .legend-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .legend-count { color: #666; font-size: 11px; }
   #stats { padding: 10px 14px; border-top: 1px solid #2a2a4e; font-size: 11px; color: #555; }
+  #controls { border-bottom: 1px solid #2a2a4e; padding: 10px 12px; max-height: 38vh; overflow-y: auto; flex-shrink: 0; }
+  .ctl-section { margin-bottom: 12px; }
+  .ctl-section:last-child { margin-bottom: 0; }
+  .ctl-section h3 { font-size: 12px; color: #aaa; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .ctl-row { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 0; cursor: pointer; color: #ccc; }
+  .ctl-row input { accent-color: #4E79A7; }
+  .lens-title { font-size: 11px; color: #777; margin: 6px 0 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+  #violation-count { font-size: 11px; margin-top: 4px; }
+  #blast-btn { width: 100%; background: #0f0f1a; border: 1px solid #3a3a5e; color: #e0e0e0; padding: 7px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  #blast-btn:hover { border-color: #4E79A7; }
+  #blast-btn.armed { border-color: #E15759; color: #E15759; }
 </style>"""
 
 
@@ -101,7 +113,10 @@ network.on('afterDrawing', function(ctx) {{
 </script>"""
 
 
-def _html_script(nodes_json: str, edges_json: str, legend_json: str) -> str:
+def _html_script(nodes_json: str, edges_json: str, legend_json: str,
+                 layers_json: str | None = None) -> str:
+    if layers_json is None:
+        layers_json = json.dumps(ALL_LAYERS)
     return f"""<script>
 const RAW_NODES = {nodes_json};
 const RAW_EDGES = {edges_json};
@@ -112,12 +127,15 @@ function esc(s) {{
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }}
 
+const nodeById = new Map(RAW_NODES.map(n => [n.id, n]));
+
 // Build vis datasets
 const nodesDS = new vis.DataSet(RAW_NODES.map(n => ({{
   id: n.id, label: n.label, color: n.color, size: n.size,
   font: n.font, title: n.title,
   _community: n.community, _community_name: n.community_name,
   _source_file: n.source_file, _file_type: n.file_type, _degree: n.degree,
+  _layer: n.layer || 'other',
   _href: n.href || null,
 }})));
 
@@ -205,14 +223,19 @@ network.on('blurNode', () => {{
 }});
 container.addEventListener('click', () => {{
   if (hoveredNodeId !== null) {{
+    if (blastArmed) {{ runBlast(hoveredNodeId); return; }}
+    if (blastClickGuard) return;
     showInfo(hoveredNodeId);
     network.selectNodes([hoveredNodeId]);
   }}
 }});
 network.on('click', params => {{
   if (params.nodes.length > 0) {{
+    if (blastArmed) {{ runBlast(params.nodes[0]); return; }}
+    if (blastClickGuard) return;
     showInfo(params.nodes[0]);
   }} else if (hoveredNodeId === null) {{
+    if (blastArmed || blastActive) {{ resetBlast(); return; }}
     document.getElementById('info-content').innerHTML = '<span class="empty">Click a node to inspect it</span>';
   }}
 }});
@@ -247,7 +270,40 @@ document.addEventListener('click', e => {{
     searchResults.style.display = 'none';
 }});
 
+// ---------- Filtering (communities + lenses) ----------
+// One shared visibility model: legend clicks and lens checkboxes both feed
+// isNodeHidden/isEdgeHidden, so every feature (search, blast radius, layer
+// bands) operates on the same notion of "currently visible".
 const hiddenCommunities = new Set();
+const lensOff = {{ relation: new Set(), confidence: new Set(), file_type: new Set() }};
+
+function relationGroup(rel) {{
+  const r = String(rel || '').toLowerCase();
+  if (r.includes('call')) return 'calls';
+  if (r.includes('import')) return 'imports';
+  if (r.includes('contain') || r.includes('method')) return 'contains/method';
+  return 'other';
+}}
+function confidenceGroup(c) {{
+  return (c === 'EXTRACTED' || c === 'INFERRED' || c === 'AMBIGUOUS') ? c : 'other';
+}}
+function fileTypeGroup(ft) {{
+  return (ft === 'code' || ft === 'document' || ft === 'observation' || ft === 'rationale') ? ft : 'other';
+}}
+function isNodeHidden(n) {{
+  return hiddenCommunities.has(n.community) || lensOff.file_type.has(fileTypeGroup(n.file_type));
+}}
+function isEdgeHidden(e) {{
+  if (lensOff.relation.has(relationGroup(e.relation))) return true;
+  if (lensOff.confidence.has(confidenceGroup(e.confidence))) return true;
+  const a = nodeById.get(e.from), b = nodeById.get(e.to);
+  return (a && isNodeHidden(a)) || (b && isNodeHidden(b));
+}}
+function applyFilters() {{
+  nodesDS.update(RAW_NODES.map(n => ({{ id: n.id, hidden: isNodeHidden(n) }})));
+  edgesDS.update(RAW_EDGES.map((e, i) => ({{ id: i, hidden: isEdgeHidden(e) }})));
+}}
+
 const legendEl = document.getElementById('legend');
 LEGEND.forEach(c => {{
   const item = document.createElement('div');
@@ -263,12 +319,191 @@ LEGEND.forEach(c => {{
       hiddenCommunities.add(c.cid);
       item.classList.add('dimmed');
     }}
-    const updates = RAW_NODES
-      .filter(n => n.community === c.cid)
-      .map(n => ({{ id: n.id, hidden: hiddenCommunities.has(c.cid) }}));
-    nodesDS.update(updates);
+    if (blastActive) resetBlast();
+    applyFilters();
   }};
   legendEl.appendChild(item);
+}});
+
+// Lens checkboxes (all checked by default; unchecking filters out)
+document.querySelectorAll('.lens-cb').forEach(cb => {{
+  cb.addEventListener('change', () => {{
+    const set = lensOff[cb.dataset.kind];
+    if (!set) return;
+    if (cb.checked) set.delete(cb.dataset.value); else set.add(cb.dataset.value);
+    if (blastActive) resetBlast();
+    applyFilters();
+  }});
+}});
+
+// ---------- Style refresh (composes layer mode + blast radius) ----------
+let layerMode = false;
+let blastArmed = false, blastActive = false, blastRoot = null, blastDepth = new Map();
+let blastClickGuard = false;
+
+function refreshEdgeStyles() {{
+  edgesDS.update(RAW_EDGES.map((e, i) => {{
+    let color = e.color, width = e.width;
+    if (layerMode && e.violation) {{
+      color = {{ color: '#E15759', opacity: 0.9 }};
+      width = 3;
+    }}
+    if (blastActive && !(blastDepth.has(e.src) && blastDepth.has(e.tgt))) {{
+      color = Object.assign({{}}, (typeof color === 'object' ? color : {{}}), {{ opacity: 0.05 }});
+    }}
+    return {{ id: i, color: color, width: width }};
+  }}));
+}}
+function refreshNodeStyles() {{
+  nodesDS.update(RAW_NODES.map(n => {{
+    const st = {{ id: n.id, color: n.color, size: n.size, borderWidth: 1.5, opacity: 1 }};
+    if (blastActive) {{
+      const d = blastDepth.get(n.id);
+      if (n.id === blastRoot) {{
+        st.color = {{ background: n.color.background, border: '#ffffff', highlight: n.color.highlight }};
+        st.borderWidth = 3;
+      }} else if (d !== undefined) {{
+        st.opacity = Math.max(0.45, 1 - 0.12 * d);
+        st.size = n.size * Math.max(1.0, 1.35 - 0.08 * d);
+      }} else {{
+        st.opacity = 0.15;
+      }}
+    }}
+    return st;
+  }}));
+}}
+
+// ---------- Layered architecture view ----------
+// Band order comes from paragraph/layers.py ALL_LAYERS: view (top) -> other (bottom)
+const LAYER_BANDS = {layers_json};
+const layersToggle = document.getElementById('layers-toggle');
+let bandMeta = null, bandLabelX = 0;
+
+if (layersToggle) {{
+  const nv = RAW_EDGES.filter(e => e.violation).length;
+  const vcEl = document.getElementById('violation-count');
+  vcEl.textContent = nv ? nv + ' layering violation' + (nv === 1 ? '' : 's') : 'no layering violations';
+  vcEl.style.color = nv ? '#E15759' : '#888';
+  layersToggle.addEventListener('change', () => {{
+    if (layersToggle.checked) enterLayerMode(); else exitLayerMode();
+  }});
+}}
+
+function enterLayerMode() {{
+  layerMode = true;
+  network.setOptions({{ physics: {{ enabled: false }} }});
+  const bandH = 260, spacing = 110;
+  const byLayer = new Map(LAYER_BANDS.map(l => [l, []]));
+  RAW_NODES.forEach(n => {{
+    byLayer.get(byLayer.has(n.layer) ? n.layer : 'other').push(n);
+  }});
+  const present = LAYER_BANDS.filter(l => byLayer.get(l).length > 0);
+  const updates = [];
+  bandMeta = [];
+  let minX = 0;
+  present.forEach((layer, bi) => {{
+    // Deterministic x spread: group by community, then stable id order
+    const nodes = byLayer.get(layer).slice().sort((a, b) =>
+      (a.community - b.community) || String(a.id).localeCompare(String(b.id)));
+    const y = bi * bandH;
+    bandMeta.push({{ label: layer, y: y }});
+    nodes.forEach((n, i) => {{
+      const x = (i - (nodes.length - 1) / 2) * spacing;
+      if (x < minX) minX = x;
+      updates.push({{ id: n.id, x: x, y: y, fixed: {{ x: true, y: true }} }});
+    }});
+  }});
+  bandLabelX = minX - 180;
+  nodesDS.update(updates);
+  refreshEdgeStyles();
+  network.fit({{ animation: true }});
+}}
+function exitLayerMode() {{
+  layerMode = false;
+  bandMeta = null;
+  nodesDS.update(RAW_NODES.map(n => ({{ id: n.id, fixed: false }})));
+  refreshEdgeStyles();
+  network.setOptions({{ physics: {{ enabled: true }} }});
+  network.once('stabilized', () => network.setOptions({{ physics: {{ enabled: false }} }}));
+}}
+// Subtle band labels at the left edge of each layer band
+network.on('afterDrawing', ctx => {{
+  if (!layerMode || !bandMeta) return;
+  ctx.save();
+  ctx.font = 'bold 12px sans-serif';
+  ctx.fillStyle = 'rgba(224, 224, 224, 0.4)';
+  ctx.textAlign = 'left';
+  bandMeta.forEach(b => ctx.fillText(b.label.toUpperCase(), bandLabelX, b.y + 4));
+  ctx.restore();
+}});
+
+// ---------- Blast radius (transitive dependents via reverse BFS) ----------
+const blastBtn = document.getElementById('blast-btn');
+blastBtn.addEventListener('click', () => {{
+  if (blastArmed) {{
+    blastArmed = false;
+    blastBtn.classList.remove('armed');
+    blastBtn.textContent = 'Blast radius';
+    return;
+  }}
+  if (blastActive) resetBlast();
+  blastArmed = true;
+  blastBtn.classList.add('armed');
+  blastBtn.textContent = 'Blast radius: click a node';
+}});
+
+function runBlast(rootId) {{
+  blastArmed = false;
+  blastBtn.classList.remove('armed');
+  blastBtn.textContent = 'Blast radius';
+  const root = nodeById.get(rootId);
+  if (!root || isNodeHidden(root)) return;
+  // Reverse adjacency over currently visible edges: tgt -> [src, ...]
+  const rev = new Map();
+  RAW_EDGES.forEach(e => {{
+    if (isEdgeHidden(e)) return;
+    if (!rev.has(e.tgt)) rev.set(e.tgt, []);
+    rev.get(e.tgt).push(e.src);
+  }});
+  blastDepth = new Map([[rootId, 0]]);
+  let frontier = [rootId], depth = 0, maxDepth = 0;
+  while (frontier.length) {{
+    depth += 1;
+    const next = [];
+    frontier.forEach(t => (rev.get(t) || []).forEach(s => {{
+      const sn = nodeById.get(s);
+      if (!blastDepth.has(s) && sn && !isNodeHidden(sn)) {{
+        blastDepth.set(s, depth);
+        next.push(s);
+        maxDepth = depth;
+      }}
+    }}));
+    frontier = next;
+  }}
+  blastRoot = rootId;
+  blastActive = true;
+  blastClickGuard = true;
+  setTimeout(() => {{ blastClickGuard = false; }}, 0);
+  refreshNodeStyles();
+  refreshEdgeStyles();
+  const count = blastDepth.size - 1;
+  document.getElementById('info-content').innerHTML =
+    `<div class="field"><b>Blast radius</b></div>
+     <div class="field">${{count}} node${{count === 1 ? '' : 's'}} depend on ${{esc(root.label)}} (max depth ${{maxDepth}})</div>
+     <div class="field" style="color:#888;font-size:11px">Esc or click empty space to reset</div>`;
+}}
+function resetBlast() {{
+  const was = blastActive || blastArmed;
+  blastArmed = false; blastActive = false; blastRoot = null; blastDepth = new Map();
+  blastBtn.classList.remove('armed');
+  blastBtn.textContent = 'Blast radius';
+  if (was) {{
+    refreshNodeStyles();
+    refreshEdgeStyles();
+  }}
+}}
+document.addEventListener('keydown', e => {{
+  if (e.key === 'Escape') resetBlast();
 }});
 </script>"""
 
@@ -375,6 +610,18 @@ def to_html(
     max_deg = max(degree.values(), default=1) or 1
     max_mc = (max(member_counts.values(), default=1) or 1) if member_counts else 1
 
+    # Architectural layer per node (shared classifier — see paragraph/layers.py).
+    # Aggregated meta-graphs lack source_file, so every node lands in "other"
+    # and the Layers toggle is suppressed below (needs >1 distinct layer).
+    node_layer = {
+        node_id: classify_layer({
+            "label": data.get("label", node_id),
+            "source_file": data.get("source_file"),
+            "file_type": data.get("file_type"),
+        })
+        for node_id, data in G.nodes(data=True)
+    }
+
     # Build nodes list for vis.js
     vis_nodes = []
     for node_id, data in G.nodes(data=True):
@@ -402,6 +649,7 @@ def to_html(
             "source_file": sanitize_label(str(data.get("source_file") or "")),
             "file_type": data.get("file_type", ""),
             "degree": deg,
+            "layer": node_layer.get(node_id, "other"),
         }
         if data.get("href"):
             vis_node["href"] = str(data["href"])
@@ -412,6 +660,13 @@ def to_html(
     for u, v, data in G.edges(data=True):
         confidence = data.get("confidence", "EXTRACTED")
         relation = data.get("relation", "")
+        # Preserved direction (_src/_tgt) — fall back to storage order (u, v)
+        src = data.get("_src", u)
+        tgt = data.get("_tgt", v)
+        if src not in node_layer or tgt not in node_layer:
+            src, tgt = u, v
+        violation = is_layer_violation(
+            node_layer.get(src, "other"), node_layer.get(tgt, "other"))
         vis_edges.append({
             "from": u,
             "to": v,
@@ -420,7 +675,11 @@ def to_html(
             "dashes": confidence != "EXTRACTED",
             "width": 2 if confidence == "EXTRACTED" else 1,
             "color": {"opacity": 0.7 if confidence == "EXTRACTED" else 0.35},
+            "relation": relation,
             "confidence": confidence,
+            "src": src,
+            "tgt": tgt,
+            "violation": violation,
         })
 
     # Build community legend data
@@ -438,7 +697,42 @@ def to_html(
     nodes_json = _js_safe(vis_nodes)
     edges_json = _js_safe(vis_edges)
     legend_json = _js_safe(legend_data)
+    layers_json = _js_safe(ALL_LAYERS)
     hyperedges_json = _js_safe(getattr(G, "graph", {}).get("hyperedges", []))
+
+    # Layers toggle only makes sense when the graph spans >1 layer (aggregated
+    # meta-graph nodes all classify as "other", so overview pages skip it).
+    show_layers = len({n["layer"] for n in vis_nodes}) > 1
+    layers_section = ("""
+  <div class="ctl-section" id="layers-section">
+    <h3>Layers</h3>
+    <label class="ctl-row"><input type="checkbox" id="layers-toggle"> Layered view</label>
+    <div id="violation-count"></div>
+  </div>""" if show_layers else "")
+
+    def _lens_cb(kind: str, value: str, text: str) -> str:
+        return (f'<label class="ctl-row"><input type="checkbox" class="lens-cb" checked '
+                f'data-kind="{kind}" data-value="{_html.escape(value)}"> {_html.escape(text)}</label>')
+
+    lenses_section = (
+        '\n  <div class="ctl-section" id="lenses-section">\n    <h3>Lenses</h3>'
+        '\n    <div class="lens-title">Relations</div>\n    '
+        + "".join(_lens_cb("relation", v, v) for v in
+                  ("calls", "imports", "contains/method", "other"))
+        + '\n    <div class="lens-title">Confidence</div>\n    '
+        + "".join(_lens_cb("confidence", v, v) for v in
+                  ("EXTRACTED", "INFERRED", "AMBIGUOUS", "other"))
+        + '\n    <div class="lens-title">Node types</div>\n    '
+        + "".join(_lens_cb("file_type", v, v) for v in
+                  ("code", "document", "observation", "rationale", "other"))
+        + '\n  </div>'
+    )
+    blast_section = (
+        '\n  <div class="ctl-section" id="blast-section">'
+        '\n    <button id="blast-btn" type="button">Blast radius</button>'
+        '\n  </div>'
+    )
+    controls_html = f'<div id="controls">{layers_section}{lenses_section}{blast_section}\n</div>'
     title = _html.escape(sanitize_label(str(output_path)))
     stats = f"{G.number_of_nodes()} nodes &middot; {G.number_of_edges()} edges &middot; {len(communities)} communities"
 
@@ -467,13 +761,14 @@ def to_html(
     <h3>Node Info</h3>
     <div id="info-content"><span class="empty">Click a node to inspect it</span></div>
   </div>
+  {controls_html}
   <div id="legend-wrap">
     <h3>Communities</h3>
     <div id="legend"></div>
   </div>
   <div id="stats">{stats}</div>
 </div>
-{_html_script(nodes_json, edges_json, legend_json)}
+{_html_script(nodes_json, edges_json, legend_json, layers_json)}
 {_hyperedge_script(hyperedges_json)}
 </body>
 </html>"""

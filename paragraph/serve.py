@@ -252,6 +252,16 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
                 description="Architectural analysis of the graph: community summaries (size, cohesion, isolation), hub/bridge/orphan nodes, and cross-community dependency cycles.",
                 inputSchema={"type": "object", "properties": {}},
             ),
+            types.Tool(
+                name="advise",
+                description="Swift coding-standards advice from the graph (massive view models, layering violations, singleton fan-in, force operations, ...). Swift code nodes only — non-Swift tooling is excluded. Returns ADVICE markdown with cited rules.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "rule_id": {"type": "string", "description": "Optional: only report findings for this rule id (e.g. SWIFT-ARCH-01)"},
+                    },
+                },
+            ),
         ]
 
     def _tool_query_graph(arguments: dict) -> str:
@@ -391,6 +401,16 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
         }
         return insights_markdown(G, communities, score_all(G, communities), labels or None)
 
+    def _tool_advise(arguments: dict) -> str:
+        from .advise import advice_markdown, load_standards, run_detectors
+        graph_data = json.loads(Path(graph_path).read_text(encoding="utf-8"))
+        standards = load_standards()
+        findings, stats = run_detectors(graph_data)
+        rule_id = (arguments or {}).get("rule_id")
+        if rule_id:
+            findings = [f for f in findings if f["rule_id"] == rule_id]
+        return advice_markdown(findings, stats, standards)
+
     _handlers = {
         "query_graph": _tool_query_graph,
         "get_node": _tool_get_node,
@@ -401,6 +421,7 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
         "shortest_path": _tool_shortest_path,
         "retrieve": _tool_retrieve,
         "insights": _tool_insights,
+        "advise": _tool_advise,
     }
 
     @server.call_tool()
