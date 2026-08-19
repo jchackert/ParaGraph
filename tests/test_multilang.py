@@ -5,6 +5,24 @@ from pathlib import Path
 import pytest
 from paragraph.extract import extract_js, extract_go, extract_rust, extract
 
+
+def _skip_if_grammar_missing(fn):
+    """Language tests skip (not fail) when the optional grammar isn't installed,
+    so the suite passes on a base install; CI installs [languages] for full coverage."""
+    import functools
+
+    @functools.wraps(fn)
+    def inner(*args, **kwargs):
+        result = fn(*args, **kwargs)
+        if isinstance(result, dict) and "not installed" in str(result.get("error", "")):
+            pytest.skip(result["error"])
+        return result
+    return inner
+
+
+extract_go = _skip_if_grammar_missing(extract_go)
+extract_rust = _skip_if_grammar_missing(extract_rust)
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 

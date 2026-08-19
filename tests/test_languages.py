@@ -11,6 +11,32 @@ from paragraph.extract import (
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+def _skip_if_grammar_missing(fn):
+    """Language tests skip (not fail) when the optional grammar isn't installed,
+    so the suite passes on a base install; CI installs [languages] for full coverage."""
+    import functools
+
+    @functools.wraps(fn)
+    def inner(*args, **kwargs):
+        result = fn(*args, **kwargs)
+        if isinstance(result, dict) and "not installed" in str(result.get("error", "")):
+            pytest.skip(result["error"])
+        return result
+    return inner
+
+
+extract_java = _skip_if_grammar_missing(extract_java)
+extract_c = _skip_if_grammar_missing(extract_c)
+extract_cpp = _skip_if_grammar_missing(extract_cpp)
+extract_ruby = _skip_if_grammar_missing(extract_ruby)
+extract_csharp = _skip_if_grammar_missing(extract_csharp)
+extract_kotlin = _skip_if_grammar_missing(extract_kotlin)
+extract_scala = _skip_if_grammar_missing(extract_scala)
+extract_php = _skip_if_grammar_missing(extract_php)
+extract_swift = _skip_if_grammar_missing(extract_swift)
+extract_go = _skip_if_grammar_missing(extract_go)
+
+
 def _labels(r):
     return [n["label"] for n in r["nodes"]]
 
@@ -418,6 +444,7 @@ def test_swift_emits_calls():
 
 
 from paragraph.extract import extract_objc
+extract_objc = _skip_if_grammar_missing(extract_objc)
 
 
 def test_objc_finds_interface():
