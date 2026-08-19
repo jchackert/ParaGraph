@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from paragraph.build import build_from_json
 from paragraph.cluster import cluster
-from paragraph.export import to_json, to_cypher, to_graphml, to_html, to_canvas
+from paragraph.export import to_json, to_cypher, to_graphml, to_html
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -161,17 +161,48 @@ def test_to_html_member_counts_accepted():
         to_html(G, communities, str(out), member_counts=member_counts)
         assert out.exists()
 
-
-def test_to_canvas_file_paths_relative_to_vault():
-    """Node file paths in canvas must be vault-root-relative (just fname.md), not hardcoded."""
+def test_to_html_auto_full_under_limit():
+    from paragraph.export import to_html_auto
     G = make_graph()
     communities = cluster(G)
     with tempfile.TemporaryDirectory() as tmp:
-        out = Path(tmp) / "graph.canvas"
-        to_canvas(G, communities, str(out))
+        out = Path(tmp) / "graph.html"
+        assert to_html_auto(G, communities, str(out)) == "full"
+        assert out.exists()
+
+
+def test_to_html_auto_aggregates_over_limit(monkeypatch):
+    import paragraph.export as export_mod
+    G = make_graph()
+    communities = cluster(G)
+    assert 1 < len(communities) < G.number_of_nodes(), "fixture must have multiple communities"
+    monkeypatch.setattr(export_mod, "MAX_NODES_FOR_VIZ", len(communities))
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "graph.html"
+        assert export_mod.to_html_auto(G, communities, str(out)) == "aggregated"
+        content = out.read_text()
+        assert "vis-network" in content
+        assert "AGGREGATED" in content
+
+
+def test_to_html_auto_skips_single_oversized_community(monkeypatch):
+    import paragraph.export as export_mod
+    G = make_graph()
+    communities = {0: list(G.nodes())}
+    monkeypatch.setattr(export_mod, "MAX_NODES_FOR_VIZ", 1)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "graph.html"
+        out.write_text("stale")
+        assert export_mod.to_html_auto(G, communities, str(out)) == "skipped"
+        assert not out.exists(), "stale graph.html must be removed on skip"
+
+
+def test_to_json_persists_community_labels():
+    G = make_graph()
+    communities = cluster(G)
+    labels = {cid: f"Named {cid}" for cid in communities}
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "graph.json"
+        to_json(G, communities, str(out), community_labels=labels)
         data = json.loads(out.read_text())
-        file_nodes = [n for n in data["nodes"] if n.get("type") == "file"]
-        assert file_nodes, "canvas should contain file nodes"
-        for node in file_nodes:
-            assert "/" not in node["file"], f"file path should not contain '/': {node['file']}"
-            assert node["file"].endswith(".md")
+        assert data["graph"]["community_labels"] == {str(k): v for k, v in labels.items()}

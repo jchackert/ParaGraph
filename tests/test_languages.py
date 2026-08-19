@@ -5,7 +5,7 @@ import pytest
 from paragraph.extract import (
     extract_java, extract_c, extract_cpp, extract_ruby,
     extract_csharp, extract_kotlin, extract_scala, extract_php,
-    extract_swift, extract_go, extract_julia,
+    extract_swift, extract_go,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -408,39 +408,15 @@ def test_swift_emits_calls():
 
 # ── Elixir ────────────────────────────────────────────────────────────────────
 
-from paragraph.extract import extract_elixir
-
-def test_elixir_finds_module():
-    r = extract_elixir(FIXTURES / "sample.ex")
-    assert "error" not in r
-    labels = [n["label"] for n in r["nodes"]]
-    assert any("MyApp.Accounts.User" in l for l in labels)
-
-def test_elixir_finds_functions():
-    r = extract_elixir(FIXTURES / "sample.ex")
-    labels = [n["label"] for n in r["nodes"]]
-    assert any("create" in l for l in labels)
-    assert any("find" in l for l in labels)
-    assert any("validate" in l for l in labels)
-
-def test_elixir_finds_imports():
-    r = extract_elixir(FIXTURES / "sample.ex")
-    import_edges = [e for e in r["edges"] if e["relation"] == "imports"]
-    assert len(import_edges) >= 2
-
-def test_elixir_finds_calls():
-    r = extract_elixir(FIXTURES / "sample.ex")
-    calls = {(e["source"], e["target"]) for e in r["edges"] if e["relation"] == "calls"}
-    labels = {n["id"]: n["label"] for n in r["nodes"]}
-    assert any("create" in labels.get(src, "") and "validate" in labels.get(tgt, "") for src, tgt in calls)
-
-def test_elixir_method_edges():
-    r = extract_elixir(FIXTURES / "sample.ex")
-    methods = [e for e in r["edges"] if e["relation"] == "method"]
-    assert len(methods) >= 3
 
 
-# ── Objective-C ──────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
 from paragraph.extract import extract_objc
 
 
@@ -505,58 +481,19 @@ def test_go_receiver_uses_pkg_scope():
 # Julia
 # ---------------------------------------------------------------------------
 
-def test_julia_finds_module():
-    r = extract_julia(FIXTURES / "sample.jl")
-    labels = [n["label"] for n in r["nodes"]]
-    assert "Geometry" in labels
 
 
-def test_julia_finds_structs():
-    r = extract_julia(FIXTURES / "sample.jl")
-    labels = [n["label"] for n in r["nodes"]]
-    assert "Point" in labels
-    assert "Circle" in labels
 
 
-def test_julia_finds_abstract_type():
-    r = extract_julia(FIXTURES / "sample.jl")
-    labels = [n["label"] for n in r["nodes"]]
-    assert "Shape" in labels
 
 
-def test_julia_finds_functions():
-    r = extract_julia(FIXTURES / "sample.jl")
-    labels = [n["label"] for n in r["nodes"]]
-    assert any("area" in l for l in labels)
-    assert any("distance" in l for l in labels)
 
 
-def test_julia_finds_short_function():
-    r = extract_julia(FIXTURES / "sample.jl")
-    labels = [n["label"] for n in r["nodes"]]
-    assert any("perimeter" in l for l in labels)
 
 
-def test_julia_finds_imports():
-    r = extract_julia(FIXTURES / "sample.jl")
-    import_edges = [e for e in r["edges"] if e["relation"] == "imports"]
-    assert len(import_edges) >= 1
 
 
-def test_julia_finds_inherits():
-    r = extract_julia(FIXTURES / "sample.jl")
-    inherits = [e for e in r["edges"] if e["relation"] == "inherits"]
-    assert len(inherits) >= 1
 
 
-def test_julia_finds_calls():
-    r = extract_julia(FIXTURES / "sample.jl")
-    call_edges = [e for e in r["edges"] if e["relation"] == "calls"]
-    assert len(call_edges) >= 1
 
 
-def test_julia_no_dangling_edges():
-    r = extract_julia(FIXTURES / "sample.jl")
-    node_ids = {n["id"] for n in r["nodes"]}
-    for e in r["edges"]:
-        assert e["source"] in node_ids, f"Dangling source: {e}"

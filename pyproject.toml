@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paragraph"
-version = "0.1.0"
+version = "0.2.0"
 description = "Claude Code skill — turn any folder of code, docs, papers, images, or videos into a queryable knowledge graph"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -41,18 +41,12 @@ languages = [
     "tree-sitter-scala",
     "tree-sitter-php",
     "tree-sitter-lua",
-    "tree-sitter-zig",
-    "tree-sitter-powershell",
-    "tree-sitter-elixir",
     "tree-sitter-objc",
-    "tree-sitter-julia",
-    "tree-sitter-verilog",
 ]
 mcp = ["mcp"]
 neo4j = ["neo4j"]
 pdf = ["pypdf", "html2text"]
 watch = ["watchdog"]
-svg = ["matplotlib"]
 leiden = ["graspologic; python_version < '3.13'"]
 office = ["python-docx", "openpyxl"]
 video = ["faster-whisper", "yt-dlp"]
@@ -60,7 +54,7 @@ all = [
     "paragraph[languages]",
     "mcp", "neo4j", "pypdf", "html2text", "watchdog",
     "graspologic; python_version < '3.13'",
-    "python-docx", "openpyxl", "faster-whisper", "yt-dlp", "matplotlib",
+    "python-docx", "openpyxl", "faster-whisper", "yt-dlp",
 ]
 
 [project.scripts]

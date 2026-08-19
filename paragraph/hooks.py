@@ -1,4 +1,4 @@
-# git hook integration - install/uninstall graphify post-commit and post-checkout hooks
+# git hook integration - install/uninstall paragraph post-commit and post-checkout hooks
 from __future__ import annotations
 import re
 import subprocess
@@ -11,31 +11,31 @@ _CHECKOUT_MARKER_END = "# graphify-checkout-hook-end"
 
 _PYTHON_DETECT = """\
 # Detect the correct Python interpreter (handles pipx, venv, system installs)
-PARAGRAPH_BIN=$(command -v graphify 2>/dev/null)
+PARAGRAPH_BIN=$(command -v paragraph 2>/dev/null)
 if [ -n "$PARAGRAPH_BIN" ]; then
     case "$PARAGRAPH_BIN" in
         *.exe) _SHEBANG="" ;;
         *)     _SHEBANG=$(head -1 "$PARAGRAPH_BIN" | sed 's/^#![[:space:]]*//') ;;
     esac
     case "$_SHEBANG" in
-        */env\\ *) GRAPHIFY_PYTHON="${_SHEBANG#*/env }" ;;
-        *)         GRAPHIFY_PYTHON="$_SHEBANG" ;;
+        */env\\ *) PARAGRAPH_PYTHON="${_SHEBANG#*/env }" ;;
+        *)         PARAGRAPH_PYTHON="$_SHEBANG" ;;
     esac
     # Allowlist: only keep characters valid in a filesystem path to prevent
     # injection if the shebang contains shell metacharacters
-    case "$GRAPHIFY_PYTHON" in
-        *[!a-zA-Z0-9/_.@-]*) GRAPHIFY_PYTHON="" ;;
+    case "$PARAGRAPH_PYTHON" in
+        *[!a-zA-Z0-9/_.@-]*) PARAGRAPH_PYTHON="" ;;
     esac
-    if [ -n "$GRAPHIFY_PYTHON" ] && ! "$GRAPHIFY_PYTHON" -c "import paragraph" 2>/dev/null; then
-        GRAPHIFY_PYTHON=""
+    if [ -n "$PARAGRAPH_PYTHON" ] && ! "$PARAGRAPH_PYTHON" -c "import paragraph" 2>/dev/null; then
+        PARAGRAPH_PYTHON=""
     fi
 fi
 # Fall back: try python3, then python (Windows has no python3 shim)
-if [ -z "$GRAPHIFY_PYTHON" ]; then
+if [ -z "$PARAGRAPH_PYTHON" ]; then
     if command -v python3 >/dev/null 2>&1 && python3 -c "import paragraph" 2>/dev/null; then
-        GRAPHIFY_PYTHON="python3"
+        PARAGRAPH_PYTHON="python3"
     elif command -v python >/dev/null 2>&1 && python -c "import paragraph" 2>/dev/null; then
-        GRAPHIFY_PYTHON="python"
+        PARAGRAPH_PYTHON="python"
     else
         exit 0
     fi
@@ -61,7 +61,7 @@ fi
 
 """ + _PYTHON_DETECT + """
 export GRAPHIFY_CHANGED="$CHANGED"
-$GRAPHIFY_PYTHON -c "
+$PARAGRAPH_PYTHON -c "
 import os, sys
 from pathlib import Path
 
@@ -112,7 +112,7 @@ GIT_DIR=$(git rev-parse --git-dir 2>/dev/null)
 
 """ + _PYTHON_DETECT + """
 echo "[paragraph] Branch switched - rebuilding knowledge graph (code files)..."
-$GRAPHIFY_PYTHON -c "
+$PARAGRAPH_PYTHON -c "
 from paragraph.watch import _rebuild_code
 from pathlib import Path
 import sys
@@ -172,7 +172,7 @@ def _install_hook(hooks_dir: Path, name: str, script: str, marker: str) -> str:
 
 
 def _uninstall_hook(hooks_dir: Path, name: str, marker: str, marker_end: str) -> str:
-    """Remove graphify section from a git hook using start/end markers."""
+    """Remove paragraph section from a git hook using start/end markers."""
     hook_path = hooks_dir / name
     if not hook_path.exists():
         return f"no {name} hook found - nothing to remove."
@@ -193,7 +193,7 @@ def _uninstall_hook(hooks_dir: Path, name: str, marker: str, marker_end: str) ->
 
 
 def install(path: Path = Path(".")) -> str:
-    """Install graphify post-commit and post-checkout hooks in the nearest git repo."""
+    """Install paragraph post-commit and post-checkout hooks in the nearest git repo."""
     root = _git_root(path)
     if root is None:
         raise RuntimeError(f"No git repository found at or above {path.resolve()}")
@@ -207,7 +207,7 @@ def install(path: Path = Path(".")) -> str:
 
 
 def uninstall(path: Path = Path(".")) -> str:
-    """Remove graphify post-commit and post-checkout hooks."""
+    """Remove paragraph post-commit and post-checkout hooks."""
     root = _git_root(path)
     if root is None:
         raise RuntimeError(f"No git repository found at or above {path.resolve()}")
@@ -230,7 +230,7 @@ def status(path: Path = Path(".")) -> str:
         p = hooks_dir / name
         if not p.exists():
             return "not installed"
-        return "installed" if marker in p.read_text(encoding="utf-8") else "not installed (hook exists but graphify not found)"
+        return "installed" if marker in p.read_text(encoding="utf-8") else "not installed (hook exists but paragraph not found)"
 
     commit = _check("post-commit", _HOOK_MARKER)
     checkout = _check("post-checkout", _CHECKOUT_MARKER)

@@ -177,6 +177,44 @@ def label_communities(G: nx.Graph, communities: dict[int, list[str]]) -> dict[in
     }
 
 
+def carry_over_labels(
+    G: nx.Graph,
+    communities: dict[int, list[str]],
+    old_node_communities: dict[str, int],
+    old_labels: dict[int, str],
+    *,
+    min_overlap: float = 0.5,
+) -> dict[int, str]:
+    """Label re-clustered communities without losing good names.
+
+    Re-clustering renumbers community IDs, so labels keyed by ID go stale.
+    Starts from deterministic member-based labels, then keeps a previous
+    label (e.g. one Claude wrote during a full /paragraph run) for any new
+    community whose members came at least min_overlap from a single previous
+    community with a non-placeholder label.
+    """
+    from collections import Counter
+
+    labels = label_communities(G, communities)
+    if not old_labels or not old_node_communities:
+        return labels
+    for cid, members in communities.items():
+        if not members:
+            continue
+        counts = Counter(
+            old_node_communities[n] for n in members if n in old_node_communities
+        )
+        if not counts:
+            continue
+        old_cid, hits = counts.most_common(1)[0]
+        if hits / len(members) < min_overlap:
+            continue
+        old = old_labels.get(old_cid)
+        if old and not old.startswith("Community "):
+            labels[cid] = old
+    return labels
+
+
 def cohesion_score(G: nx.Graph, community_nodes: list[str]) -> float:
     """Ratio of actual intra-community edges to maximum possible."""
     n = len(community_nodes)

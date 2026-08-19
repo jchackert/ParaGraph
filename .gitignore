@@ -15,7 +15,9 @@ build/
 .graphify/
 graphify-out/
 .graphify_*.json
-.graphify_python
+.paragraph_*.json
+.paragraph_python
+
 .claude/
 skills/
 docs/superpowers/

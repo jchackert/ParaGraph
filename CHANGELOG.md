@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.0
+
+### Added
+
+- **Persistent community labels** -- Claude-written labels are stored in `graph.json` (`graph.community_labels`) and survive the skill's temp-file cleanup; LLM-free rebuilds (`update`, `watch`, `cluster-only`) carry labels across re-clustering by member overlap (`cluster.carry_over_labels`) instead of resetting to "Community N", falling back to deterministic member-based names
+- **`paragraph analyze`** -- architectural analysis to `graphify-out/GRAPH_INSIGHTS.md`: per-community summaries (size, cohesion, isolation, dominant directories), hub/bridge/orphan node classification, cross-community dependency cycles (new `paragraph/insights.py`)
+- **`paragraph enrich`** -- the vectors.db producer, ported from PARA_Note's `graphify-enrich.py`: source bodies on code nodes, timestamps, embeddings via local ollama (new `paragraph/enrich.py`). `paragraph retrieve` now works end-to-end
+- **Config-driven claude-mem ingest** -- filtering vocabulary (domain keywords, reviewer names, ticket patterns) moved from hardcoded constants to `IngestConfig`, loaded from `graphify-out/ingest-config.json`, `~/.paragraph/ingest-config.json`, or `--config`; ParaNote's vocabulary ships as `docs/examples/paranote-ingest.json`
+- **Oversized-graph viz fallback** -- graphs over 5,000 nodes get an aggregated community-level `graph.html` (`to_html_auto`) instead of none
+- **Chunk dedup wired in** -- `deduplicate_by_label` now runs in the skill's semantic merge step (it was documented as automatic but never called)
+
+### Fixed
+
+- `skill.md` invoked `python -m graphify save-result` (3x) and emitted a `graphify.serve` MCP config -- both failed with `No module named graphify`
+- `paragraph clone` wrote `~/.graphify/repos/` while skill.md read `~/.paragraph/repos/` -- multi-repo merge could not find its inputs (legacy clones still found)
+- MCP server now actually calls `security.validate_graph_path()` as SECURITY.md claimed
+- Whisper env vars renamed to `PARAGRAPH_WHISPER_MODEL`/`PARAGRAPH_WHISPER_PROMPT` (old `GRAPHIFY_*` names still honored)
+
+### Removed
+
+- Long-tail hand-rolled extractors: Julia, Verilog, Zig, PowerShell, Elixir, Dart, Blade (~950 lines); their grammars dropped from the `[languages]` extra. Those files still get semantic extraction
+- Obsidian vault + Canvas, SVG, and wiki exports (~800 lines incl. `wiki.py`); the `svg` extra
+- Dead code: `manifest.py`, `build()`, `build_merge`, `prune_dangling_edges`, `generate_html` alias, tests-only helpers
+- Shared tree-sitter preamble and `add_node`/`add_edge` boilerplate hoisted out of the remaining hand-rolled extractors (Go, Rust, Objective-C)
+
 ## 0.1.0 (fork)
 
 Forked from [graphify 0.5.0](https://github.com/safishamsi/graphify) by Safi Shamsi.

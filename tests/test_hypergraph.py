@@ -8,7 +8,7 @@ import networkx as nx
 import pytest
 
 from paragraph.build import build_from_json
-from paragraph.export import attach_hyperedges, to_json
+from paragraph.export import to_json
 from paragraph.report import generate
 
 
@@ -77,35 +77,6 @@ def test_build_from_json_missing_hyperedges_key():
 # ---------------------------------------------------------------------------
 # 2. attach_hyperedges deduplicates by id
 # ---------------------------------------------------------------------------
-
-def test_attach_hyperedges_adds_new():
-    G = nx.Graph()
-    attach_hyperedges(G, [{"id": "auth_flow", "label": "Auth Flow", "nodes": ["A", "B", "C"]}])
-    assert len(G.graph["hyperedges"]) == 1
-
-
-def test_attach_hyperedges_deduplicates():
-    G = nx.Graph()
-    h = {"id": "auth_flow", "label": "Auth Flow", "nodes": ["A", "B", "C"]}
-    attach_hyperedges(G, [h])
-    attach_hyperedges(G, [h])  # second call with same id should not duplicate
-    assert len(G.graph["hyperedges"]) == 1
-
-
-def test_attach_hyperedges_multiple_different_ids():
-    G = nx.Graph()
-    attach_hyperedges(G, [
-        {"id": "flow_a", "label": "Flow A", "nodes": ["A", "B", "C"]},
-        {"id": "flow_b", "label": "Flow B", "nodes": ["D", "E", "F"]},
-    ])
-    assert len(G.graph["hyperedges"]) == 2
-
-
-def test_attach_hyperedges_skips_entry_without_id():
-    G = nx.Graph()
-    attach_hyperedges(G, [{"label": "No ID", "nodes": ["A", "B", "C"]}])
-    assert G.graph.get("hyperedges", []) == []
-
 
 # ---------------------------------------------------------------------------
 # 3. to_json includes hyperedges key

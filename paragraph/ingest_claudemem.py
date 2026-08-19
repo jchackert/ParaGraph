@@ -17,96 +17,126 @@ DEFAULT_DB_PATH = Path.home() / ".claude-mem" / "claude-mem.db"
 TARGET_TYPES = ("decision", "bugfix", "feature", "change", "refactor")
 
 # ---------------------------------------------------------------------------
-# Scoring configuration
+# Filtering configuration
+#
+# All project-specific vocabulary (domain keywords, reviewer names, ticket
+# prefixes) lives in an IngestConfig, loadable from JSON. Defaults are
+# generic; see docs/examples/paranote-ingest.json for a fully-tuned example.
 # ---------------------------------------------------------------------------
+from dataclasses import dataclass, field
 
-# Signal keywords: +2.0 each, capped at +4.0 total
-_SIGNAL_KEYWORDS = [
-    "architectural", "design", "decision", "pattern", "constraint", "principle",
-    "binding", "ruling", "rationale", "root cause", "must not", "never", "always",
-]
 
-# Clinical/product keywords: +2.0 each, capped at +4.0 total
-_CLINICAL_KEYWORDS = [
-    "carol", "clinical", "adhd", "para state", "ubiquitous language",
-    "scope decision", "byok", "subscription", "layer 1", "layer 2", "layer 3",
-    "apple intelligence",
-]
+@dataclass
+class IngestConfig:
+    # Signal keywords: +2.0 each, capped at +4.0 total
+    signal_keywords: list[str] = field(default_factory=lambda: [
+        "architectural", "design", "decision", "pattern", "constraint", "principle",
+        "binding", "ruling", "rationale", "root cause", "must not", "never", "always",
+    ])
+    # Domain/product keywords: +2.0 each, capped at +4.0 total (project-specific)
+    domain_keywords: list[str] = field(default_factory=list)
+    # Noise title patterns (regex strings): -2.0 each
+    noise_title_patterns: list[str] = field(default_factory=lambda: [
+        r"\btest suite\b", r"\bpassing\b", r"\btests pass\b", r"\bgreen\b",
+        r"\bstandup dispatched\b", r"\bstandup orchestration\b",
+        r"\bstandup guardrail\b", r"\bstandup guard\b", r"\bstandup skill\b",
+        r"\bstandup discipline\b", r"\bassigned to\b", r"\btypo fixed\b",
+        r"\bmoved to\b", r"\bmarked complete\b", r"^\[\*\*title\*\*",
+        r"\breference sweep\b",
+    ])
+    noise_narrative_prefixes: list[str] = field(default_factory=lambda: [
+        "During standup", "While waiting",
+    ])
+    score_threshold: float = 4.0
+    dedup_jaccard_threshold: float = 0.5
+    # Passthrough vocabulary (always inject regardless of score)
+    reviewers: list[str] = field(default_factory=list)
+    passthrough_phrases: list[str] = field(default_factory=lambda: ["code review ruling"])
+    ticket_patterns: list[str] = field(default_factory=list)
+    ticket_keywords: list[str] = field(default_factory=lambda: ["ticket"])
+    passthrough_file_substrings: list[str] = field(default_factory=list)
+    decision_keywords: list[str] = field(default_factory=lambda: [
+        "architecture", "design pattern",
+    ])
+    # Names stripped from titles before trigram dedup (agent/reviewer names)
+    dedup_ignore_names: list[str] = field(default_factory=list)
 
-# Noise title patterns: -2.0 each
-_NOISE_TITLE_PATTERNS = [
-    re.compile(r"\btest suite\b", re.IGNORECASE),
-    re.compile(r"\bpassing\b", re.IGNORECASE),
-    re.compile(r"\btests pass\b", re.IGNORECASE),
-    re.compile(r"\bgreen\b", re.IGNORECASE),
-    re.compile(r"\bstandup dispatched\b", re.IGNORECASE),
-    re.compile(r"\bstandup orchestration\b", re.IGNORECASE),
-    re.compile(r"\bstandup guardrail\b", re.IGNORECASE),
-    re.compile(r"\bstandup guard\b", re.IGNORECASE),
-    re.compile(r"\bstandup skill\b", re.IGNORECASE),
-    re.compile(r"\bstandup discipline\b", re.IGNORECASE),
-    re.compile(r"\bassigned to\b", re.IGNORECASE),
-    re.compile(r"\btypo fixed\b", re.IGNORECASE),
-    re.compile(r"\bmoved to\b", re.IGNORECASE),
-    re.compile(r"\bmarked complete\b", re.IGNORECASE),
-    re.compile(r"^\[\*\*title\*\*", re.IGNORECASE),
-    re.compile(r"\breference sweep\b", re.IGNORECASE),
-]
+    @classmethod
+    def from_dict(cls, data: dict) -> "IngestConfig":
+        known = {f for f in cls.__dataclass_fields__}
+        unknown = set(data) - known
+        if unknown:
+            print(f"warning: ignoring unknown ingest-config keys: {sorted(unknown)}",
+                  file=sys.stderr)
+        return cls(**{k: v for k, v in data.items() if k in known})
 
-# Noise narrative prefixes
-_NOISE_NARRATIVE_PREFIXES = [
-    "During standup",
-    "While waiting",
-]
+    def compiled_noise_patterns(self) -> list:
+        return [re.compile(p, re.IGNORECASE) for p in self.noise_title_patterns]
 
-# Score threshold for inclusion
-_SCORE_THRESHOLD = 4.0
+    def compiled_ticket_patterns(self) -> list:
+        return [re.compile(p, re.IGNORECASE) for p in self.ticket_patterns]
 
-# Jaccard deduplication threshold on title 3-grams
-_DEDUP_JACCARD_THRESHOLD = 0.5
+
+DEFAULT_CONFIG = IngestConfig()
+
+
+def load_ingest_config(project_path: Path, config_path: Path | None = None) -> IngestConfig:
+    """Load the ingest config: explicit path, else <project>/graphify-out/ingest-config.json,
+    else ~/.paragraph/ingest-config.json, else generic defaults."""
+    candidates = [config_path] if config_path else [
+        project_path / "graphify-out" / "ingest-config.json",
+        Path.home() / ".paragraph" / "ingest-config.json",
+    ]
+    for candidate in candidates:
+        if candidate and candidate.exists():
+            print(f"Using ingest config: {candidate}")
+            return IngestConfig.from_dict(json.loads(candidate.read_text()))
+    if config_path:
+        raise FileNotFoundError(f"ingest config not found: {config_path}")
+    return IngestConfig()
 
 
 # ---------------------------------------------------------------------------
 # Pass-through rules (always inject regardless of score)
 # ---------------------------------------------------------------------------
-def _is_passthrough(obs: dict) -> bool:
+def _reviewer_phrases(name: str) -> list[str]:
+    n = name.lower()
+    return [
+        f"{n} ruling", f"{n} requires", f"{n} must", f"{n} veto",
+        f"{n} signed off", f"{n} approved", f"{n} accepted",
+        f"{n}'s review", f"{n}'s feedback", f"{n}'s fix", f"{n} review",
+    ]
+
+
+def _is_passthrough(obs: dict, cfg: IngestConfig) -> bool:
     """Return True if this observation must always be injected."""
     title = (obs.get("title") or "").lower()
     narrative = (obs.get("narrative") or "").lower()
     files_modified = obs.get("files_modified") or ""
     text_lower = title + " " + narrative
 
-    # Carol ruling, veto, or clinical feedback that was accepted/applied
-    has_carol_signal = "carol" in text_lower and any(
-        phrase in text_lower for phrase in (
-            "ruling", "carol requires", "carol must", "binding",
-            "carol veto", "carol signed off", "carol approved",
-            "carol's review", "carol's feedback", "carol's fix",
-            "clinical ruling",
-        )
-    )
-    # CA-N ticket format (clinical audit tickets, not substring matches)
-    has_ca_ticket = bool(re.search(r"\bca-\d+\b", text_lower))
-    if has_carol_signal or has_ca_ticket:
+    # Reviewer ruling/veto/feedback that was accepted or applied
+    for reviewer in cfg.reviewers:
+        if reviewer.lower() in text_lower and any(
+            phrase in text_lower for phrase in _reviewer_phrases(reviewer)
+        ):
+            return True
+    if any(phrase in text_lower for phrase in cfg.passthrough_phrases):
         return True
 
-    # Sam's code review feedback that was accepted/applied
+    # Ticket-ID formats (exact patterns, not substring matches)
+    if any(p.search(text_lower) for p in cfg.compiled_ticket_patterns()):
+        return True
+
+    # Modification of always-keep file paths
+    modified_list = _parse_json_list(files_modified)
     if any(
-        phrase in text_lower for phrase in (
-            "sam's review", "sam's feedback", "sam review",
-            "sam approved", "sam accepted", "sam signed off",
-            "code review ruling", "sam's code review",
-        )
+        sub in f for f in modified_list for sub in cfg.passthrough_file_substrings
     ):
         return True
 
-    # Clinical file modification
-    modified_list = _parse_json_list(files_modified)
-    if any("docs/clinical/" in f for f in modified_list):
-        return True
-
-    # Ticket work with resolution context (preserves what was decided/planned and why)
-    if any(word in text_lower for word in ("ticket", "cw-", "paranote-")) and any(
+    # Ticket work with resolution context (preserves what was decided and why)
+    if any(word in text_lower for word in cfg.ticket_keywords) and any(
         word in text_lower for word in (
             "created", "resolved", "closed", "fixed", "shipped",
             "plan", "approved", "marked done", "completed",
@@ -116,11 +146,7 @@ def _is_passthrough(obs: dict) -> bool:
 
     # Architecture, design, or pattern decisions with codebase impact
     if obs.get("type") == "decision" and any(
-        word in text_lower for word in (
-            "architecture", "design pattern", "layer 1", "layer 2", "layer 3",
-            "swiftdata", "intelligence stack", "classification",
-            "capture flow", "consent flow", "offline",
-        )
+        word in text_lower for word in cfg.decision_keywords
     ):
         return True
 
@@ -130,7 +156,7 @@ def _is_passthrough(obs: dict) -> bool:
 # ---------------------------------------------------------------------------
 # Hard stop rules (never inject regardless of score)
 # ---------------------------------------------------------------------------
-def _is_hard_stop(obs: dict) -> bool:
+def _is_hard_stop(obs: dict, cfg: IngestConfig) -> bool:
     """Return True if this observation must never be injected."""
     title = obs.get("title") or ""
     obs_type = obs.get("type") or ""
@@ -158,7 +184,7 @@ def _is_hard_stop(obs: dict) -> bool:
 # ---------------------------------------------------------------------------
 # Scoring function
 # ---------------------------------------------------------------------------
-def filter_observation(obs: dict) -> tuple[bool, float, str]:
+def filter_observation(obs: dict, cfg: IngestConfig = DEFAULT_CONFIG) -> tuple[bool, float, str]:
     """
     Evaluate one observation.
 
@@ -170,11 +196,11 @@ def filter_observation(obs: dict) -> tuple[bool, float, str]:
     files_modified = _parse_json_list(obs.get("files_modified"))
 
     # Hard stops first
-    if _is_hard_stop(obs):
+    if _is_hard_stop(obs, cfg):
         return False, 0.0, "hard_stop"
 
     # Pass-throughs bypass scoring
-    if _is_passthrough(obs):
+    if _is_passthrough(obs, cfg):
         return True, 99.0, "passthrough"
 
     score = 0.0
@@ -182,18 +208,18 @@ def filter_observation(obs: dict) -> tuple[bool, float, str]:
 
     # --- Signal keywords (max +4.0) ---
     text_lower = (title + " " + narrative).lower()
-    signal_hits = sum(1 for kw in _SIGNAL_KEYWORDS if kw in text_lower)
+    signal_hits = sum(1 for kw in cfg.signal_keywords if kw in text_lower)
     signal_bonus = min(signal_hits * 2.0, 4.0)
     if signal_bonus:
         score += signal_bonus
         reason_parts.append(f"signal+{signal_bonus:.1f}({signal_hits}hits)")
 
-    # --- Clinical/product keywords (max +4.0) ---
-    clinical_hits = sum(1 for kw in _CLINICAL_KEYWORDS if kw in text_lower)
-    clinical_bonus = min(clinical_hits * 2.0, 4.0)
-    if clinical_bonus:
-        score += clinical_bonus
-        reason_parts.append(f"clinical+{clinical_bonus:.1f}({clinical_hits}hits)")
+    # --- Domain/product keywords (max +4.0) ---
+    domain_hits = sum(1 for kw in cfg.domain_keywords if kw in text_lower)
+    domain_bonus = min(domain_hits * 2.0, 4.0)
+    if domain_bonus:
+        score += domain_bonus
+        reason_parts.append(f"domain+{domain_bonus:.1f}({domain_hits}hits)")
 
     # --- Bug quality (+1.5 if "fixed"/"root cause" AND files_modified non-empty) ---
     if obs_type == "bugfix" and files_modified:
@@ -231,7 +257,7 @@ def filter_observation(obs: dict) -> tuple[bool, float, str]:
             reason_parts.append("bugfix_no_code+0.5")
 
     # --- Noise penalties (-2.0 each) ---
-    title_penalties = sum(1 for p in _NOISE_TITLE_PATTERNS if p.search(title))
+    title_penalties = sum(1 for p in cfg.compiled_noise_patterns() if p.search(title))
     noise_from_title = title_penalties * 2.0
     if noise_from_title:
         score -= noise_from_title
@@ -239,7 +265,7 @@ def filter_observation(obs: dict) -> tuple[bool, float, str]:
 
     narrative_stripped = narrative.lstrip()
     narrative_penalties = sum(
-        1 for prefix in _NOISE_NARRATIVE_PREFIXES
+        1 for prefix in cfg.noise_narrative_prefixes
         if narrative_stripped.startswith(prefix)
     )
     noise_from_narrative = narrative_penalties * 2.0
@@ -252,7 +278,7 @@ def filter_observation(obs: dict) -> tuple[bool, float, str]:
         score += 0.5
         reason_parts.append("length+0.5")
 
-    keep = score >= _SCORE_THRESHOLD
+    keep = score >= cfg.score_threshold
     reason = ",".join(reason_parts) if reason_parts else "no_signal"
     return keep, score, reason
 
@@ -260,15 +286,12 @@ def filter_observation(obs: dict) -> tuple[bool, float, str]:
 # ---------------------------------------------------------------------------
 # Deduplication
 # ---------------------------------------------------------------------------
-def _normalize_title(title: str) -> str:
-    """Lowercase, remove punctuation, remove known agent names."""
-    agent_names = {
-        "sam", "greg", "peter", "alice", "tiger", "cindy", "bobby",
-        "mike", "carol", "jordan",
-    }
+def _normalize_title(title: str, cfg: IngestConfig = DEFAULT_CONFIG) -> str:
+    """Lowercase, remove punctuation, remove configured agent/reviewer names."""
+    ignore = {n.lower() for n in cfg.dedup_ignore_names}
     t = title.lower()
     t = re.sub(r"[^\w\s]", " ", t)
-    words = [w for w in t.split() if w not in agent_names]
+    words = [w for w in t.split() if w not in ignore]
     return " ".join(words)
 
 
@@ -291,6 +314,7 @@ def _jaccard(a: set, b: set) -> float:
 def deduplicate(
     observations: list[dict],
     scores: dict[str, float],
+    cfg: IngestConfig = DEFAULT_CONFIG,
 ) -> tuple[list[dict], list[str]]:
     """
     Given observations and their scores, remove duplicates.
@@ -302,7 +326,7 @@ def deduplicate(
     tg: dict[str, set[str]] = {}
     for obs in observations:
         oid = str(obs["id"])
-        tg[oid] = _trigrams(_normalize_title(obs.get("title") or ""))
+        tg[oid] = _trigrams(_normalize_title(obs.get("title") or "", cfg))
 
     ids = [str(o["id"]) for o in observations]
     dropped: set[str] = set()
@@ -314,7 +338,7 @@ def deduplicate(
             if oid_b in dropped:
                 continue
             sim = _jaccard(tg[oid_a], tg[oid_b])
-            if sim > _DEDUP_JACCARD_THRESHOLD:
+            if sim > cfg.dedup_jaccard_threshold:
                 # Keep the higher-scored one
                 score_a = scores.get(oid_a, 0.0)
                 score_b = scores.get(oid_b, 0.0)
@@ -467,6 +491,7 @@ def run(
     db_path: Path | None = None,
     graph_path: Path | None = None,
     project: str | None = None,
+    config_path: Path | None = None,
 ) -> int:
     """
     Inject claude-mem observations into a graph.json.
@@ -485,6 +510,7 @@ def run(
     db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
     graph_path = Path(graph_path) if graph_path else project_path / "graphify-out" / "graph.json"
     target_project = project or project_path.name
+    cfg = load_ingest_config(project_path, config_path)
 
     if not db_path.exists():
         print(f"claude-mem DB not found at {db_path} — skipping injection.")
@@ -530,7 +556,7 @@ def run(
     filter_reasons: Counter = Counter()
 
     for obs in raw_observations:
-        keep, score, reason = filter_observation(obs)
+        keep, score, reason = filter_observation(obs, cfg)
         oid = str(obs["id"])
         scores[oid] = score
         if keep:
@@ -559,7 +585,7 @@ def run(
     # -----------------------------------------------------------------------
     print()
     print("--- Deduplication ---")
-    deduped_obs, dedup_log = deduplicate(kept_obs, scores)
+    deduped_obs, dedup_log = deduplicate(kept_obs, scores, cfg)
     deduped_count = len(kept_obs) - len(deduped_obs)
 
     for line in dedup_log:

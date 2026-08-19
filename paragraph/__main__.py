@@ -14,7 +14,7 @@ except Exception:
 
 
 def _check_skill_version(skill_dst: Path) -> None:
-    """Warn if the installed skill is from an older graphify version."""
+    """Warn if the installed skill is from an older paragraph version."""
     version_file = skill_dst.parent / ".paragraph_version"
     if not version_file.exists():
         return
@@ -108,28 +108,28 @@ This project has a graphify knowledge graph at graphify-out/.
 
 Rules:
 - Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
-- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
 - For cross-module "how does X relate to Y" questions, prefer `paragraph query "<question>"`, `paragraph path "<A>" "<B>"`, or `paragraph explain "<concept>"` over grep — these traverse the graph's EXTRACTED + INFERRED edges instead of scanning files
+- For architecture reviews, run `paragraph analyze .` — community summaries, hubs/bridges/orphans, and cross-community dependency cycles land in graphify-out/GRAPH_INSIGHTS.md
 - After modifying code files in this session, run `paragraph update .` to keep the graph current (AST-only, no API cost)
 """
 
 _CLAUDE_MD_MARKER = "## paragraph"
 
 def claude_install(project_dir: Path | None = None) -> None:
-    """Write the graphify section to the local CLAUDE.md."""
+    """Write the paragraph section to the local CLAUDE.md."""
     target = (project_dir or Path(".")) / "CLAUDE.md"
 
     if target.exists():
         content = target.read_text(encoding="utf-8")
         if _CLAUDE_MD_MARKER in content:
-            print("graphify already configured in CLAUDE.md")
+            print("paragraph already configured in CLAUDE.md")
             return
         new_content = content.rstrip() + "\n\n" + _CLAUDE_MD_SECTION
     else:
         new_content = _CLAUDE_MD_SECTION
 
     target.write_text(new_content, encoding="utf-8")
-    print(f"graphify section written to {target.resolve()}")
+    print(f"paragraph section written to {target.resolve()}")
 
     # Also write Claude Code PreToolUse hook to .claude/settings.json
     _install_claude_hook(project_dir or Path("."))
@@ -152,7 +152,7 @@ def _is_paragraph_hook(hook: dict) -> bool:
 
 
 def _install_claude_hook(project_dir: Path) -> None:
-    """Add graphify PreToolUse hook to .claude/settings.json."""
+    """Add paragraph PreToolUse hook to .claude/settings.json."""
     settings_path = project_dir / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -174,7 +174,7 @@ def _install_claude_hook(project_dir: Path) -> None:
 
 
 def _uninstall_claude_hook(project_dir: Path) -> None:
-    """Remove graphify PreToolUse hook from .claude/settings.json."""
+    """Remove paragraph PreToolUse hook from .claude/settings.json."""
     settings_path = project_dir / ".claude" / "settings.json"
     if not settings_path.exists():
         return
@@ -192,7 +192,7 @@ def _uninstall_claude_hook(project_dir: Path) -> None:
 
 
 def claude_uninstall(project_dir: Path | None = None) -> None:
-    """Remove the graphify section from the local CLAUDE.md."""
+    """Remove the paragraph section from the local CLAUDE.md."""
     target = (project_dir or Path(".")) / "CLAUDE.md"
 
     if not target.exists():
@@ -201,7 +201,7 @@ def claude_uninstall(project_dir: Path | None = None) -> None:
 
     content = target.read_text(encoding="utf-8")
     if _CLAUDE_MD_MARKER not in content:
-        print("graphify section not found in CLAUDE.md - nothing to do")
+        print("paragraph section not found in CLAUDE.md - nothing to do")
         return
 
     # Remove the ## paragraph section: from the marker to the next ## heading or EOF
@@ -213,7 +213,7 @@ def claude_uninstall(project_dir: Path | None = None) -> None:
     ).rstrip()
     if cleaned:
         target.write_text(cleaned + "\n", encoding="utf-8")
-        print(f"graphify section removed from {target.resolve()}")
+        print(f"paragraph section removed from {target.resolve()}")
     else:
         target.unlink()
         print(f"CLAUDE.md was empty after removal - deleted {target.resolve()}")
@@ -224,8 +224,9 @@ def claude_uninstall(project_dir: Path | None = None) -> None:
 def _clone_repo(url: str, branch: str | None = None, out_dir: Path | None = None) -> Path:
     """Clone a GitHub repo to a local cache dir and return the path.
 
-    Clones into ~/.graphify/repos/<owner>/<repo> by default so repeated
+    Clones into ~/.paragraph/repos/<owner>/<repo> by default so repeated
     runs on the same URL reuse the existing clone (git pull instead of clone).
+    Falls back to a pre-rename ~/.graphify/repos clone if one already exists.
     """
     import subprocess as _sp
     import re as _re
@@ -248,7 +249,10 @@ def _clone_repo(url: str, branch: str | None = None, out_dir: Path | None = None
     if out_dir:
         dest = out_dir
     else:
-        dest = Path.home() / ".graphify" / "repos" / owner / repo
+        dest = Path.home() / ".paragraph" / "repos" / owner / repo
+        legacy = Path.home() / ".graphify" / "repos" / owner / repo
+        if not dest.exists() and legacy.exists():
+            dest = legacy
 
     if dest.exists():
         print(f"Repo already cloned at {dest} — pulling latest...", flush=True)
@@ -285,15 +289,15 @@ def main() -> None:
         print()
         print("Commands:")
         print("  install                 copy skill to ~/.claude/skills/paragraph/ and register in CLAUDE.md")
-        print("  claude install          write graphify section to CLAUDE.md + PreToolUse hook")
-        print("  claude uninstall        remove graphify section from CLAUDE.md + PreToolUse hook")
+        print("  claude install          write paragraph section to CLAUDE.md + PreToolUse hook")
+        print("  claude uninstall        remove paragraph section from CLAUDE.md + PreToolUse hook")
         print("  path \"A\" \"B\"            shortest path between two nodes in graph.json")
         print("    --graph <path>          path to graph.json (default graphify-out/graph.json)")
         print("  explain \"X\"             plain-language explanation of a node and its neighbors")
         print("    --graph <path>          path to graph.json (default graphify-out/graph.json)")
         print("  clone <github-url>      clone a GitHub repo locally and print its path for /paragraph")
         print("    --branch <branch>       checkout a specific branch (default: repo default)")
-        print("    --out <dir>             clone to a custom directory (default: ~/.graphify/repos/<owner>/<repo>)")
+        print("    --out <dir>             clone to a custom directory (default: ~/.paragraph/repos/<owner>/<repo>)")
         print("  merge-graphs <g1> <g2>  merge two or more graph.json files into one cross-repo graph")
         print("    --out <path>            output path (default: graphify-out/merged-graph.json)")
         print("  add <url>               fetch a URL and save it to ./raw, then update the graph")
@@ -306,7 +310,16 @@ def main() -> None:
         print("    --db <path>             claude-mem SQLite DB (default ~/.claude-mem/claude-mem.db)")
         print("    --graph <path>          path to graph.json (default <path>/graphify-out/graph.json)")
         print("    --project <name>        claude-mem project name (default: basename of <path>)")
+        print("    --config <path>         filtering vocabulary JSON (default: graphify-out/ingest-config.json")
+        print("                            or ~/.paragraph/ingest-config.json; see docs/examples/paranote-ingest.json)")
         print("  cluster-only <path>     rerun clustering on an existing graph.json and regenerate report")
+        print("  analyze [path]          architectural analysis: community summaries, hubs/bridges/orphans,")
+        print("                          cross-community dependency cycles -> graphify-out/GRAPH_INSIGHTS.md")
+        print("  enrich [path]           add source bodies + timestamps to graph.json and build vectors.db")
+        print("    --bodies-only           skip the embedding step (no ollama needed)")
+        print("    --embed-only            skip bodies/timestamps, just (re)embed")
+        print("    --stats                 report current enrichment state")
+        print("    --model <name>          embedding model (default nomic-embed-text)")
         print("  query \"<question>\"       BFS traversal of graph.json for a question")
         print("    --dfs                   use depth-first instead of breadth-first")
         print("    --budget N              cap output at N tokens (default 2000)")
@@ -570,6 +583,63 @@ def main() -> None:
             print(f"error: {exc}", file=sys.stderr)
             sys.exit(1)
 
+    elif cmd == "analyze":
+        watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")
+        graph_json = watch_path / "graphify-out" / "graph.json"
+        if not graph_json.exists():
+            print(f"error: no graph found at {graph_json} — run /paragraph first", file=sys.stderr)
+            sys.exit(1)
+        from networkx.readwrite import json_graph as _jg
+        from paragraph.cluster import score_all
+        from paragraph.insights import insights_markdown
+        data = json.loads(graph_json.read_text(encoding="utf-8"))
+        try:
+            G = _jg.node_link_graph(data, edges="links")
+        except TypeError:
+            G = _jg.node_link_graph(data)
+        communities: dict[int, list[str]] = {}
+        for node in data.get("nodes", []):
+            cid = node.get("community")
+            if cid is not None:
+                communities.setdefault(int(cid), []).append(node["id"])
+        if not communities:
+            print("error: graph.json has no community assignments — run cluster-only first", file=sys.stderr)
+            sys.exit(1)
+        labels = {
+            int(k): v
+            for k, v in (data.get("graph", {}).get("community_labels") or {}).items()
+            if str(k).lstrip("-").isdigit()
+        }
+        cohesion = score_all(G, communities)
+        md = insights_markdown(G, communities, cohesion, labels or None)
+        out_path = watch_path / "graphify-out" / "GRAPH_INSIGHTS.md"
+        out_path.write_text(md, encoding="utf-8")
+        print(md)
+        print(f"Written to {out_path}")
+
+    elif cmd == "enrich":
+        args = sys.argv[2:]
+        target = Path(".")
+        bodies_only = embed_only = stats_only = False
+        model = "nomic-embed-text"
+        i = 0
+        while i < len(args):
+            if args[i] == "--bodies-only":
+                bodies_only = True; i += 1
+            elif args[i] == "--embed-only":
+                embed_only = True; i += 1
+            elif args[i] == "--stats":
+                stats_only = True; i += 1
+            elif args[i] == "--model" and i + 1 < len(args):
+                model = args[i + 1]; i += 2
+            elif not args[i].startswith("--"):
+                target = Path(args[i]); i += 1
+            else:
+                i += 1
+        from paragraph.enrich import run as _run_enrich
+        sys.exit(_run_enrich(target, bodies_only=bodies_only, embed_only=embed_only,
+                             stats_only=stats_only, model=model))
+
     elif cmd == "cluster-only":
         watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")
         graph_json = watch_path / "graphify-out" / "graph.json"
@@ -582,7 +652,7 @@ def main() -> None:
         from paragraph.analyze import god_nodes, surprising_connections, suggest_questions
         from paragraph.report import (generate, freshness_report, root_label,
                                       stable_mode_default, FRESHNESS_FILENAME)
-        from paragraph.export import to_json, to_html
+        from paragraph.export import to_json, to_html_auto
         print("Loading existing graph...")
         _raw = json.loads(graph_json.read_text(encoding="utf-8"))
         G = build_from_json(_raw)
@@ -592,7 +662,17 @@ def main() -> None:
         cohesion = score_all(G, communities)
         gods = god_nodes(G)
         surprises = surprising_connections(G, communities)
-        labels = {cid: f"Community {cid}" for cid in communities}
+        from paragraph.cluster import carry_over_labels
+        old_labels = {
+            int(k): v
+            for k, v in (_raw.get("graph", {}).get("community_labels") or {}).items()
+            if str(k).lstrip("-").isdigit()
+        }
+        old_node_communities = {
+            n["id"]: n["community"] for n in _raw.get("nodes", [])
+            if n.get("community") is not None
+        }
+        labels = carry_over_labels(G, communities, old_node_communities, old_labels)
         questions = suggest_questions(G, communities, labels)
         tokens = {"input": 0, "output": 0}
         report = generate(G, communities, cohesion, labels, gods, surprises,
@@ -606,9 +686,12 @@ def main() -> None:
                     {"warning": "cluster-only mode — file stats not available"},
                     root_label(watch_path), out_dir=out),
                 encoding="utf-8")
-        to_json(G, communities, str(out / "graph.json"))
-        to_html(G, communities, str(out / "graph.html"), community_labels=labels or None)
-        print(f"Done — {len(communities)} communities. GRAPH_REPORT.md, graph.json and graph.html updated.")
+        to_json(G, communities, str(out / "graph.json"), community_labels=labels)
+        viz = to_html_auto(G, communities, str(out / "graph.html"), community_labels=labels or None)
+        if viz == "aggregated":
+            print("Graph too large for full viz — graph.html shows the aggregated community view.")
+        html_part = " graph.json and graph.html" if viz != "skipped" else " and graph.json"
+        print(f"Done — {len(communities)} communities. GRAPH_REPORT.md,{html_part} updated.")
 
     elif cmd == "update":
         watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")
@@ -626,7 +709,7 @@ def main() -> None:
 
     elif cmd == "ingest-claude-mem":
         if len(sys.argv) < 3:
-            print("Usage: paragraph ingest-claude-mem <project-path> [--db path] [--graph path] [--project name]", file=sys.stderr)
+            print("Usage: paragraph ingest-claude-mem <project-path> [--db path] [--graph path] [--project name] [--config path]", file=sys.stderr)
             sys.exit(1)
         project_path = Path(sys.argv[2])
         if not project_path.exists():
@@ -635,6 +718,7 @@ def main() -> None:
         db_path: Path | None = None
         cm_graph_path: Path | None = None
         cm_project: str | None = None
+        cm_config: Path | None = None
         args = sys.argv[3:]
         i = 0
         while i < len(args):
@@ -644,10 +728,13 @@ def main() -> None:
                 cm_graph_path = Path(args[i + 1]); i += 2
             elif args[i] == "--project" and i + 1 < len(args):
                 cm_project = args[i + 1]; i += 2
+            elif args[i] == "--config" and i + 1 < len(args):
+                cm_config = Path(args[i + 1]); i += 2
             else:
                 i += 1
         from paragraph.ingest_claudemem import run as _run_claudemem
-        sys.exit(_run_claudemem(project_path, db_path=db_path, graph_path=cm_graph_path, project=cm_project))
+        sys.exit(_run_claudemem(project_path, db_path=db_path, graph_path=cm_graph_path,
+                                project=cm_project, config_path=cm_config))
 
     elif cmd == "check-update":
         if len(sys.argv) < 3:

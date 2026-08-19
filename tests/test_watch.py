@@ -94,3 +94,34 @@ def test_watch_raises_without_watchdog(tmp_path, monkeypatch):
     from paragraph.watch import watch
     with pytest.raises(ImportError, match="watchdog not installed"):
         watch(tmp_path)
+
+
+def test_rebuild_code_carries_semantic_labels(tmp_path):
+    """A Claude-written community label in graph.json survives an LLM-free rebuild."""
+    import json
+    from paragraph.watch import _rebuild_code
+
+    (tmp_path / "app.py").write_text(
+        "class AuthManager:\n"
+        "    def login(self):\n"
+        "        return validate()\n\n"
+        "def validate():\n"
+        "    return True\n"
+    )
+    assert _rebuild_code(tmp_path) is True
+    graph_path = tmp_path / "graphify-out" / "graph.json"
+    data = json.loads(graph_path.read_text())
+    labels = data.get("graph", {}).get("community_labels")
+    assert labels, "rebuild must persist community labels"
+    assert not all(v.startswith("Community ") for v in labels.values()), \
+        "labels must be member-based, not placeholders"
+
+    # Simulate a semantic label written by a full /paragraph run
+    for cid in labels:
+        labels[cid] = "Authentication Layer"
+    data["graph"]["community_labels"] = labels
+    graph_path.write_text(json.dumps(data))
+
+    assert _rebuild_code(tmp_path) is True
+    data2 = json.loads(graph_path.read_text())
+    assert "Authentication Layer" in data2["graph"]["community_labels"].values()

@@ -129,3 +129,41 @@ def test_cluster_stores_labels_on_graph_metadata():
     communities = cluster(G)
     stored = G.graph.get("community_labels")
     assert stored == label_communities(G, communities)
+
+
+def test_carry_over_labels_keeps_overlapping_label():
+    import networkx as nx
+    from paragraph.cluster import carry_over_labels
+    G = nx.Graph()
+    for n in ["a", "b", "c", "x", "y"]:
+        G.add_node(n, label=n)
+    communities = {0: ["a", "b", "c"], 1: ["x", "y"]}
+    old_node_communities = {"a": 7, "b": 7, "c": 7, "x": 3}
+    old_labels = {7: "Auth Flow", 3: "Community 3"}
+    labels = carry_over_labels(G, communities, old_node_communities, old_labels)
+    assert labels[0] == "Auth Flow"
+    # placeholder old label is not carried; falls back to member-based label
+    assert labels[1] != "Community 3"
+
+
+def test_carry_over_labels_low_overlap_falls_back():
+    import networkx as nx
+    from paragraph.cluster import carry_over_labels
+    G = nx.Graph()
+    for n in ["a", "b", "c", "d"]:
+        G.add_node(n, label=n)
+    communities = {0: ["a", "b", "c", "d"]}
+    old_node_communities = {"a": 7}  # only 25% overlap
+    old_labels = {7: "Auth Flow"}
+    labels = carry_over_labels(G, communities, old_node_communities, old_labels)
+    assert labels[0] != "Auth Flow"
+
+
+def test_carry_over_labels_no_history_is_deterministic():
+    import networkx as nx
+    from paragraph.cluster import carry_over_labels, label_communities
+    G = nx.Graph()
+    for n in ["a", "b"]:
+        G.add_node(n, label=n)
+    communities = {0: ["a", "b"]}
+    assert carry_over_labels(G, communities, {}, {}) == label_communities(G, communities)

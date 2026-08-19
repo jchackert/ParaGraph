@@ -255,3 +255,53 @@ def test_explicit_project_override(tmp_path):
     rc = run(project, db_path=db, project="CustomName")
     assert rc == 0
     assert {n["id"] for n in _claudemem_nodes(graph_path)} == {"claudemem_5"}
+
+
+def test_ingest_config_domain_keywords_boost_score():
+    from paragraph.ingest_claudemem import IngestConfig, filter_observation
+    obs = {
+        "id": 1, "type": "change", "title": "Adjusted para state handling",
+        "narrative": "Reworked para state transitions for the capture flow. " * 3,
+        "files_modified": "[]",
+    }
+    keep_default, score_default, _ = filter_observation(obs)
+    cfg = IngestConfig(domain_keywords=["para state", "capture flow"])
+    keep_cfg, score_cfg, reason = filter_observation(obs, cfg)
+    assert score_cfg > score_default
+    assert "domain+" in reason
+
+
+def test_ingest_config_reviewer_passthrough():
+    from paragraph.ingest_claudemem import IngestConfig, filter_observation
+    obs = {
+        "id": 2, "type": "change", "title": "Carol ruling on consent copy",
+        "narrative": "Carol ruling applied: consent screen copy must name the data recipient. " * 2,
+        "files_modified": "[]",
+    }
+    keep_default, _, _ = filter_observation(obs)
+    assert keep_default is False
+    cfg = IngestConfig(reviewers=["Carol"])
+    keep_cfg, score, reason = filter_observation(obs, cfg)
+    assert keep_cfg is True and reason == "passthrough"
+
+
+def test_ingest_config_loads_from_graphify_out(tmp_path, capsys):
+    import json as _json
+    from paragraph.ingest_claudemem import load_ingest_config
+    out = tmp_path / "graphify-out"
+    out.mkdir()
+    (out / "ingest-config.json").write_text(_json.dumps({"reviewers": ["Dana"], "score_threshold": 2.0}))
+    cfg = load_ingest_config(tmp_path)
+    assert cfg.reviewers == ["Dana"]
+    assert cfg.score_threshold == 2.0
+
+
+def test_paranote_example_config_parses():
+    import json as _json
+    from pathlib import Path as _P
+    from paragraph.ingest_claudemem import IngestConfig
+    example = _P(__file__).parent.parent / "docs" / "examples" / "paranote-ingest.json"
+    cfg = IngestConfig.from_dict(_json.loads(example.read_text()))
+    assert "carol" in cfg.domain_keywords
+    assert cfg.reviewers == ["Carol", "Sam"]
+    assert cfg.ticket_patterns and cfg.dedup_ignore_names

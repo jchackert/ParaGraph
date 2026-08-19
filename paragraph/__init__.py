@@ -1,4 +1,4 @@
-"""graphify - extract · build · cluster · analyze · report."""
+"""paragraph - extract · build · cluster · analyze · report."""
 
 
 def __getattr__(name):
@@ -16,9 +16,6 @@ def __getattr__(name):
         "generate": ("paragraph.report", "generate"),
         "to_json": ("paragraph.export", "to_json"),
         "to_html": ("paragraph.export", "to_html"),
-        "to_svg": ("paragraph.export", "to_svg"),
-        "to_canvas": ("paragraph.export", "to_canvas"),
-        "to_wiki": ("paragraph.wiki", "to_wiki"),
     }
     if name in _map:
         import importlib

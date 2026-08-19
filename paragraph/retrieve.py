@@ -14,7 +14,7 @@ Pipeline:
   6. Pack into token budget with diversity floor
 
 Only the query itself is embedded (via local ollama). The corpus embeddings
-come from the vectors.db store built by the enrichment pipeline — this module
+come from the vectors.db store built by 'paragraph enrich' — this module
 never re-embeds the corpus.
 
 Usage:
@@ -630,7 +630,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not vectors_path.exists():
         print(f"Vector store not found: {vectors_path}", file=sys.stderr)
-        print("Build it with the embedding enrichment pipeline before using retrieve.", file=sys.stderr)
+        print("Build it first: paragraph enrich . (needs a local ollama with nomic-embed-text)", file=sys.stderr)
         return 1
     if not graph_path.exists():
         print(f"error: graph file not found: {graph_path}", file=sys.stderr)

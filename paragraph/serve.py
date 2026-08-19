@@ -156,6 +156,8 @@ def serve(graph_path: str = "graphify-out/graph.json") -> None:
     except ImportError as e:
         raise ImportError("mcp not installed. Run: pip install mcp") from e
 
+    from paragraph.security import validate_graph_path
+    graph_path = str(validate_graph_path(graph_path))
     G = _load_graph(graph_path)
     communities = _communities_from_graph(G)
 

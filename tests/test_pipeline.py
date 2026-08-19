@@ -15,7 +15,7 @@ from paragraph.build import build_from_json
 from paragraph.cluster import cluster, score_all
 from paragraph.analyze import god_nodes, surprising_connections, suggest_questions
 from paragraph.report import generate
-from paragraph.export import to_json, to_html, to_obsidian
+from paragraph.export import to_json, to_html
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -82,14 +82,6 @@ def run_pipeline(tmp_path: Path) -> dict:
     html = html_path.read_text()
     assert "vis-network" in html
     assert "RAW_NODES" in html
-
-    # Step 9: export - Obsidian vault
-    vault_path = tmp_path / "obsidian"
-    n_notes = to_obsidian(G, communities, str(vault_path), community_labels=labels, cohesion=cohesion)
-    assert n_notes > 0
-    assert (vault_path / ".obsidian" / "graph.json").exists()
-    md_files = list(vault_path.glob("*.md"))
-    assert len(md_files) > 0
 
     return {
         "detection": detection,

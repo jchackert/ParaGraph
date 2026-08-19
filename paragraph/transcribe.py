@@ -15,7 +15,9 @@ _FALLBACK_PROMPT = "Use proper punctuation and paragraph breaks."
 
 
 def _model_name() -> str:
-    return os.environ.get("GRAPHIFY_WHISPER_MODEL", _DEFAULT_MODEL)
+    # GRAPHIFY_WHISPER_MODEL honored as a pre-rename fallback
+    return os.environ.get("PARAGRAPH_WHISPER_MODEL") or os.environ.get(
+        "GRAPHIFY_WHISPER_MODEL", _DEFAULT_MODEL)
 
 
 def _get_whisper():
@@ -86,30 +88,6 @@ def download_audio(url: str, output_dir: Path) -> Path:
                 downloaded = p
                 break
         return downloaded
-
-
-def build_whisper_prompt(god_nodes: list[dict]) -> str:
-    """Build a domain hint for Whisper from god nodes extracted from the corpus.
-
-    Formats the top god node labels into a topic string for Whisper.
-    The coding agent (Claude Code, Codex, etc.) generates the actual one-sentence
-    domain hint from these labels and passes it via GRAPHIFY_WHISPER_PROMPT or
-    as initial_prompt — no separate API call needed here.
-    """
-    if not god_nodes:
-        return _FALLBACK_PROMPT
-
-    override = os.environ.get("GRAPHIFY_WHISPER_PROMPT")
-    if override:
-        return override
-
-    labels = [n.get("label", "") for n in god_nodes[:10] if n.get("label")]
-    if not labels:
-        return _FALLBACK_PROMPT
-
-    topics = ", ".join(labels[:5])
-    return f"Technical discussion about {topics}. Use proper punctuation and paragraph breaks."
-
 
 def transcribe(
     video_path: Path | str,

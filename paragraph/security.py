@@ -102,7 +102,7 @@ def safe_fetch(url: str, max_bytes: int = _MAX_FETCH_BYTES, timeout: int = 30) -
     """
     validate_url(url)
     opener = _build_opener()
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 graphify/1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 paragraph/1.0"})
 
     with opener.open(req, timeout=timeout) as resp:
         # urllib raises HTTPError for non-2xx when using urlopen directly;
@@ -146,7 +146,7 @@ def validate_graph_path(path: str | Path, base: Path | None = None) -> Path:
 
     *base* defaults to the `graphify-out` directory relative to CWD.
     Also requires the base directory to exist, so a caller cannot
-    trick graphify into reading files before any graph has been built.
+    trick paragraph into reading files before any graph has been built.
 
     Raises:
         ValueError  - path escapes base, or base does not exist

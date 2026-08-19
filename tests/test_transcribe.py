@@ -9,7 +9,6 @@ import pytest
 
 from paragraph.transcribe import (
     VIDEO_EXTENSIONS,
-    build_whisper_prompt,
     transcribe,
     transcribe_all,
 )
@@ -25,40 +24,6 @@ def test_video_extensions_set():
     assert ".wav" in VIDEO_EXTENSIONS
     assert ".mov" in VIDEO_EXTENSIONS
     assert ".py" not in VIDEO_EXTENSIONS
-
-
-# ---------------------------------------------------------------------------
-# build_whisper_prompt
-# ---------------------------------------------------------------------------
-
-def test_build_whisper_prompt_no_nodes():
-    """Empty god_nodes returns fallback prompt."""
-    prompt = build_whisper_prompt([])
-    assert "punctuation" in prompt.lower() or len(prompt) > 0
-
-
-def test_build_whisper_prompt_env_override(monkeypatch):
-    """GRAPHIFY_WHISPER_PROMPT env var short-circuits LLM call."""
-    monkeypatch.setenv("GRAPHIFY_WHISPER_PROMPT", "Custom domain hint.")
-    prompt = build_whisper_prompt([{"label": "Python"}, {"label": "FastAPI"}])
-    assert prompt == "Custom domain hint."
-
-
-def test_build_whisper_prompt_returns_topic_string():
-    """Returns a topic-based prompt from god node labels — no LLM call."""
-    god_nodes = [{"label": "neural networks"}, {"label": "transformers"}, {"label": "attention"}]
-    with patch.dict(os.environ, {}, clear=False):
-        os.environ.pop("GRAPHIFY_WHISPER_PROMPT", None)
-        prompt = build_whisper_prompt(god_nodes)
-    assert "neural networks" in prompt.lower() or "transformers" in prompt.lower()
-    assert "punctuation" in prompt.lower()
-
-
-def test_build_whisper_prompt_nodes_without_labels():
-    """Nodes missing 'label' keys are safely skipped."""
-    god_nodes = [{"id": "1"}, {"id": "2", "label": ""}]
-    prompt = build_whisper_prompt(god_nodes)
-    assert len(prompt) > 0
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-# write graph to HTML, JSON, SVG, GraphML, Obsidian vault, and Neo4j Cypher
+# write graph to HTML, JSON, GraphML, and Neo4j Cypher
 from __future__ import annotations
 import html as _html
 import json
@@ -267,19 +267,8 @@ LEGEND.forEach(c => {{
 
 _CONFIDENCE_SCORE_DEFAULTS = {"EXTRACTED": 1.0, "INFERRED": 0.5, "AMBIGUOUS": 0.2}
 
-
-def attach_hyperedges(G: nx.Graph, hyperedges: list) -> None:
-    """Store hyperedges in the graph's metadata dict."""
-    existing = G.graph.get("hyperedges", [])
-    seen_ids = {h["id"] for h in existing}
-    for h in hyperedges:
-        if h.get("id") and h["id"] not in seen_ids:
-            existing.append(h)
-            seen_ids.add(h["id"])
-    G.graph["hyperedges"] = existing
-
-
-def to_json(G: nx.Graph, communities: dict[int, list[str]], output_path: str, *, force: bool = False) -> None:
+def to_json(G: nx.Graph, communities: dict[int, list[str]], output_path: str, *,
+            community_labels: dict[int, str] | None = None, force: bool = False) -> None:
     # Safety check: refuse to silently shrink an existing graph (#479)
     existing_path = Path(output_path)
     if not force and existing_path.exists():
@@ -313,24 +302,15 @@ def to_json(G: nx.Graph, communities: dict[int, list[str]], output_path: str, *,
             conf = link.get("confidence", "EXTRACTED")
             link["confidence_score"] = _CONFIDENCE_SCORE_DEFAULTS.get(conf, 1.0)
     data["hyperedges"] = getattr(G, "graph", {}).get("hyperedges", [])
+    if community_labels:
+        # graph.json is the canonical store for community labels — semantic
+        # (Claude-written) labels passed here survive the skill's temp-file
+        # cleanup and are recovered by LLM-free rebuilds (watch, cluster-only).
+        data.setdefault("graph", {})["community_labels"] = {
+            str(cid): label for cid, label in community_labels.items()
+        }
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
-
-
-def prune_dangling_edges(graph_data: dict) -> tuple[dict, int]:
-    """Remove edges whose source or target node is not in the node set.
-
-    Returns the cleaned graph_data dict and the number of pruned edges.
-    """
-    node_ids = {n["id"] for n in graph_data["nodes"]}
-    links_key = "links" if "links" in graph_data else "edges"
-    before = len(graph_data[links_key])
-    graph_data[links_key] = [
-        e for e in graph_data[links_key]
-        if e["source"] in node_ids and e["target"] in node_ids
-    ]
-    return graph_data, before - len(graph_data[links_key])
-
 
 def _cypher_escape(s: str) -> str:
     """Escape a string for safe embedding in a Cypher single-quoted literal."""
@@ -454,7 +434,7 @@ def to_html(
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>graphify - {title}</title>
+<title>paragraph - {title}</title>
 <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 {_html_styles()}
 </head>
@@ -487,409 +467,53 @@ def to_html(
 generate_html = to_html
 
 
-def to_obsidian(
-    G: nx.Graph,
-    communities: dict[int, list[str]],
-    output_dir: str,
-    community_labels: dict[int, str] | None = None,
-    cohesion: dict[int, float] | None = None,
-) -> int:
-    """Export graph as an Obsidian vault - one .md file per node with [[wikilinks]],
-    plus one _COMMUNITY_name.md overview note per community (sorted to top by underscore prefix).
-
-    Open the output directory as a vault in Obsidian to get an interactive
-    graph view with community colors and full-text search over node metadata.
-
-    Returns the number of node notes + community notes written.
-    """
-    out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-
-    node_community = _node_community_map(communities)
-
-    # Map node_id → safe filename so wikilinks stay consistent.
-    # Deduplicate: if two nodes produce the same filename, append a numeric suffix.
-    def safe_name(label: str) -> str:
-        cleaned = re.sub(r'[\\/*?:"<>|#^[\]]', "", label.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")).strip()
-        # Strip trailing .md/.mdx/.markdown so "CLAUDE.md" doesn't become "CLAUDE.md.md"
-        cleaned = re.sub(r"\.(md|mdx|markdown)$", "", cleaned, flags=re.IGNORECASE)
-        return cleaned or "unnamed"
-
-    node_filename: dict[str, str] = {}
-    seen_names: dict[str, int] = {}
-    for node_id, data in G.nodes(data=True):
-        base = safe_name(data.get("label", node_id))
-        if base in seen_names:
-            seen_names[base] += 1
-            node_filename[node_id] = f"{base}_{seen_names[base]}"
-        else:
-            seen_names[base] = 0
-            node_filename[node_id] = base
-
-    # Helper: compute dominant confidence for a node across all its edges
-    def _dominant_confidence(node_id: str) -> str:
-        confs = []
-        for u, v, edata in G.edges(node_id, data=True):
-            confs.append(edata.get("confidence", "EXTRACTED"))
-        if not confs:
-            return "EXTRACTED"
-        return Counter(confs).most_common(1)[0][0]
-
-    # Map file_type → graphify tag
-    _FTYPE_TAG = {
-        "code": "graphify/code",
-        "document": "graphify/document",
-        "paper": "graphify/paper",
-        "image": "graphify/image",
-    }
-
-    # Write one .md file per node
-    for node_id, data in G.nodes(data=True):
-        label = data.get("label", node_id)
-        cid = node_community.get(node_id)
-        community_name = (
-            community_labels.get(cid, f"Community {cid}")
-            if community_labels and cid is not None
-            else f"Community {cid}"
-        )
-
-        # Build tags for this node
-        ftype = data.get("file_type", "")
-        ftype_tag = _FTYPE_TAG.get(ftype, f"graphify/{ftype}" if ftype else "graphify/document")
-        dom_conf = _dominant_confidence(node_id)
-        conf_tag = f"graphify/{dom_conf}"
-        comm_tag = f"community/{community_name.replace(' ', '_')}"
-        node_tags = [ftype_tag, conf_tag, comm_tag]
-
-        lines: list[str] = []
-
-        # YAML frontmatter - readable in Obsidian's properties panel
-        lines += [
-            "---",
-            f'source_file: "{data.get("source_file", "")}"',
-            f'type: "{ftype}"',
-            f'community: "{community_name}"',
-        ]
-        if data.get("source_location"):
-            lines.append(f'location: "{data["source_location"]}"')
-        # Add tags list to frontmatter
-        lines.append("tags:")
-        for tag in node_tags:
-            lines.append(f"  - {tag}")
-        lines += ["---", "", f"# {label}", ""]
-
-        # Outgoing edges as wikilinks
-        neighbors = list(G.neighbors(node_id))
-        if neighbors:
-            lines.append("## Connections")
-            for neighbor in sorted(neighbors, key=lambda n: G.nodes[n].get("label", n)):
-                edge_data = G.edges[node_id, neighbor]
-                neighbor_label = node_filename[neighbor]
-                relation = edge_data.get("relation", "")
-                confidence = edge_data.get("confidence", "EXTRACTED")
-                lines.append(f"- [[{neighbor_label}]] - `{relation}` [{confidence}]")
-            lines.append("")
-
-        # Inline tags at bottom of note body (for Obsidian tag panel)
-        inline_tags = " ".join(f"#{t}" for t in node_tags)
-        lines.append(inline_tags)
-
-        fname = node_filename[node_id] + ".md"
-        (out / fname).write_text("\n".join(lines), encoding="utf-8")
-
-    # Write one _COMMUNITY_name.md overview note per community
-    # Build inter-community edge counts for "Connections to other communities"
-    inter_community_edges: dict[int, dict[int, int]] = {}
+def build_meta_graph(G: nx.Graph, communities: dict[int, list[str]],
+                     community_labels: dict[int, str] | None = None) -> nx.Graph:
+    """Collapse G to one node per community, edges weighted by cross-community edge counts."""
+    labels = community_labels or {}
+    node_to_community = {nid: cid for cid, members in communities.items() for nid in members}
+    meta = nx.Graph()
     for cid in communities:
-        inter_community_edges[cid] = {}
+        meta.add_node(str(cid), label=labels.get(cid, f"Community {cid}"))
+    edge_counts: Counter = Counter()
     for u, v in G.edges():
-        cu = node_community.get(u)
-        cv = node_community.get(v)
+        cu, cv = node_to_community.get(u), node_to_community.get(v)
         if cu is not None and cv is not None and cu != cv:
-            inter_community_edges.setdefault(cu, {})
-            inter_community_edges.setdefault(cv, {})
-            inter_community_edges[cu][cv] = inter_community_edges[cu].get(cv, 0) + 1
-            inter_community_edges[cv][cu] = inter_community_edges[cv].get(cu, 0) + 1
-
-    # Precompute per-node community reach (number of distinct communities a node connects to)
-    def _community_reach(node_id: str) -> int:
-        neighbor_cids = {
-            node_community[nb]
-            for nb in G.neighbors(node_id)
-            if nb in node_community and node_community[nb] != node_community.get(node_id)
-        }
-        return len(neighbor_cids)
-
-    community_notes_written = 0
-    for cid, members in communities.items():
-        community_name = (
-            community_labels.get(cid, f"Community {cid}")
-            if community_labels and cid is not None
-            else f"Community {cid}"
-        )
-        n_members = len(members)
-        coh_value = cohesion.get(cid) if cohesion else None
-
-        lines: list[str] = []
-
-        # YAML frontmatter
-        lines.append("---")
-        lines.append("type: community")
-        if coh_value is not None:
-            lines.append(f"cohesion: {coh_value:.2f}")
-        lines.append(f"members: {n_members}")
-        lines.append("---")
-        lines.append("")
-        lines.append(f"# {community_name}")
-        lines.append("")
-
-        # Cohesion + member count summary
-        if coh_value is not None:
-            cohesion_desc = (
-                "tightly connected" if coh_value >= 0.7
-                else "moderately connected" if coh_value >= 0.4
-                else "loosely connected"
-            )
-            lines.append(f"**Cohesion:** {coh_value:.2f} - {cohesion_desc}")
-        lines.append(f"**Members:** {n_members} nodes")
-        lines.append("")
-
-        # Members section
-        lines.append("## Members")
-        for node_id in sorted(members, key=lambda n: G.nodes[n].get("label", n)):
-            data = G.nodes[node_id]
-            node_label = node_filename[node_id]
-            ftype = data.get("file_type", "")
-            source = data.get("source_file", "")
-            entry = f"- [[{node_label}]]"
-            if ftype:
-                entry += f" - {ftype}"
-            if source:
-                entry += f" - {source}"
-            lines.append(entry)
-        lines.append("")
-
-        # Dataview live query (improvement 2)
-        comm_tag_name = community_name.replace(" ", "_")
-        lines.append("## Live Query (requires Dataview plugin)")
-        lines.append("")
-        lines.append("```dataview")
-        lines.append(f"TABLE source_file, type FROM #community/{comm_tag_name}")
-        lines.append("SORT file.name ASC")
-        lines.append("```")
-        lines.append("")
-
-        # Connections to other communities
-        cross = inter_community_edges.get(cid, {})
-        if cross:
-            lines.append("## Connections to other communities")
-            for other_cid, edge_count in sorted(cross.items(), key=lambda x: -x[1]):
-                other_name = (
-                    community_labels.get(other_cid, f"Community {other_cid}")
-                    if community_labels and other_cid is not None
-                    else f"Community {other_cid}"
-                )
-                other_safe = safe_name(other_name)
-                lines.append(f"- {edge_count} edge{'s' if edge_count != 1 else ''} to [[_COMMUNITY_{other_safe}]]")
-            lines.append("")
-
-        # Top bridge nodes - highest degree nodes that connect to other communities
-        bridge_nodes = [
-            (node_id, G.degree(node_id), _community_reach(node_id))
-            for node_id in members
-            if _community_reach(node_id) > 0
-        ]
-        bridge_nodes.sort(key=lambda x: (-x[2], -x[1]))
-        top_bridges = bridge_nodes[:5]
-        if top_bridges:
-            lines.append("## Top bridge nodes")
-            for node_id, degree, reach in top_bridges:
-                node_label = node_filename[node_id]
-                lines.append(
-                    f"- [[{node_label}]] - degree {degree}, connects to {reach} "
-                    f"{'community' if reach == 1 else 'communities'}"
-                )
-
-        community_safe = safe_name(community_name)
-        fname = f"_COMMUNITY_{community_safe}.md"
-        (out / fname).write_text("\n".join(lines), encoding="utf-8")
-        community_notes_written += 1
-
-    # Improvement 4: write .obsidian/graph.json to color nodes by community in graph view
-    obsidian_dir = out / ".obsidian"
-    obsidian_dir.mkdir(exist_ok=True)
-    graph_config = {
-        "colorGroups": [
-            {
-                "query": f"tag:#community/{label.replace(' ', '_')}",
-                "color": {"a": 1, "rgb": int(COMMUNITY_COLORS[cid % len(COMMUNITY_COLORS)].lstrip('#'), 16)}
-            }
-            for cid, label in sorted((community_labels or {}).items())
-        ]
-    }
-    (obsidian_dir / "graph.json").write_text(json.dumps(graph_config, indent=2), encoding="utf-8")
-
-    return G.number_of_nodes() + community_notes_written
+            edge_counts[(min(cu, cv), max(cu, cv))] += 1
+    for (cu, cv), w in edge_counts.items():
+        meta.add_edge(str(cu), str(cv), weight=w,
+                      relation=f"{w} cross-community edges", confidence="AGGREGATED")
+    return meta
 
 
-def to_canvas(
+def to_html_auto(
     G: nx.Graph,
     communities: dict[int, list[str]],
     output_path: str,
     community_labels: dict[int, str] | None = None,
-    node_filenames: dict[str, str] | None = None,
-) -> None:
-    """Export graph as an Obsidian Canvas file - communities as groups, nodes as cards.
+) -> str:
+    """Write an HTML viz, aggregating to a community-level view when the graph
+    exceeds MAX_NODES_FOR_VIZ instead of raising like to_html.
 
-    Generates a structured layout: communities arranged in a grid, nodes within
-    each community arranged in rows. Edges shown between connected nodes.
-    Opens in Obsidian as an infinite canvas with community groupings visible.
+    Returns "full", "aggregated", or "skipped" (a single community would
+    aggregate to one dot; more communities than MAX_NODES_FOR_VIZ cannot be
+    drawn either). A skip removes any stale file at output_path so downstream
+    tooling never serves an outdated viz.
     """
-    # Obsidian canvas color codes (cycle through for communities)
-    CANVAS_COLORS = ["1", "2", "3", "4", "5", "6"]  # red, orange, yellow, green, cyan, purple
-
-    def safe_name(label: str) -> str:
-        cleaned = re.sub(r'[\\/*?:"<>|#^[\]]', "", label.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")).strip()
-        cleaned = re.sub(r"\.(md|mdx|markdown)$", "", cleaned, flags=re.IGNORECASE)
-        return cleaned or "unnamed"
-
-    # Build node_filenames if not provided (same dedup logic as to_obsidian)
-    if node_filenames is None:
-        node_filenames = {}
-        seen_names: dict[str, int] = {}
-        for node_id, data in G.nodes(data=True):
-            base = safe_name(data.get("label", node_id))
-            if base in seen_names:
-                seen_names[base] += 1
-                node_filenames[node_id] = f"{base}_{seen_names[base]}"
-            else:
-                seen_names[base] = 0
-                node_filenames[node_id] = base
-
-    num_communities = len(communities)
-    cols = math.ceil(math.sqrt(num_communities)) if num_communities > 0 else 1
-    rows = math.ceil(num_communities / cols) if num_communities > 0 else 1
-
-    canvas_nodes: list[dict] = []
-    canvas_edges: list[dict] = []
-
-    # Lay out communities in a grid
-    gap = 80
-    group_x_offsets: list[int] = []
-    group_y_offsets: list[int] = []
-
-    # Precompute group sizes so we can calculate offsets
-    sorted_cids = sorted(communities.keys())
-    group_sizes: dict[int, tuple[int, int]] = {}
-    for cid in sorted_cids:
-        members = communities[cid]
-        n = len(members)
-        w = max(600, 220 * math.ceil(math.sqrt(n)) if n > 0 else 600)
-        h = max(400, 100 * math.ceil(n / 3) + 120 if n > 0 else 400)
-        group_sizes[cid] = (w, h)
-
-    # Compute cumulative row heights and col widths for grid placement
-    # Each grid cell uses the max width/height in its col/row
-    col_widths: list[int] = []
-    row_heights: list[int] = []
-    for col_idx in range(cols):
-        max_w = 0
-        for row_idx in range(rows):
-            linear = row_idx * cols + col_idx
-            if linear < len(sorted_cids):
-                cid = sorted_cids[linear]
-                w, _ = group_sizes[cid]
-                max_w = max(max_w, w)
-        col_widths.append(max_w)
-
-    for row_idx in range(rows):
-        max_h = 0
-        for col_idx in range(cols):
-            linear = row_idx * cols + col_idx
-            if linear < len(sorted_cids):
-                cid = sorted_cids[linear]
-                _, h = group_sizes[cid]
-                max_h = max(max_h, h)
-        row_heights.append(max_h)
-
-    # Map from cid → (group_x, group_y, group_w, group_h)
-    group_layout: dict[int, tuple[int, int, int, int]] = {}
-    for idx, cid in enumerate(sorted_cids):
-        col_idx = idx % cols
-        row_idx = idx // cols
-        gx = sum(col_widths[:col_idx]) + col_idx * gap
-        gy = sum(row_heights[:row_idx]) + row_idx * gap
-        gw, gh = group_sizes[cid]
-        group_layout[cid] = (gx, gy, gw, gh)
-
-    # Build set of all node_ids in canvas for edge filtering
-    all_canvas_nodes: set[str] = set()
-    for members in communities.values():
-        all_canvas_nodes.update(members)
-
-    # Generate group and node canvas entries
-    for idx, cid in enumerate(sorted_cids):
-        members = communities[cid]
-        community_name = (
-            community_labels.get(cid, f"Community {cid}")
-            if community_labels and cid is not None
-            else f"Community {cid}"
-        )
-        gx, gy, gw, gh = group_layout[cid]
-        canvas_color = CANVAS_COLORS[idx % len(CANVAS_COLORS)]
-
-        # Group node
-        canvas_nodes.append({
-            "id": f"g{cid}",
-            "type": "group",
-            "label": community_name,
-            "x": gx,
-            "y": gy,
-            "width": gw,
-            "height": gh,
-            "color": canvas_color,
-        })
-
-        # Node cards inside the group - rows of 3
-        sorted_members = sorted(members, key=lambda n: G.nodes[n].get("label", n))
-        for m_idx, node_id in enumerate(sorted_members):
-            col = m_idx % 3
-            row = m_idx // 3
-            nx_x = gx + 20 + col * (180 + 20)
-            nx_y = gy + 80 + row * (60 + 20)
-            fname = node_filenames.get(node_id, safe_name(G.nodes[node_id].get("label", node_id)))
-            canvas_nodes.append({
-                "id": f"n_{node_id}",
-                "type": "file",
-                "file": f"{fname}.md",
-                "x": nx_x,
-                "y": nx_y,
-                "width": 180,
-                "height": 60,
-            })
-
-    # Generate edges - only between nodes both in canvas, cap at 200 highest-weight
-    all_edges_weighted: list[tuple[float, str, str, str]] = []
-    for u, v, edata in G.edges(data=True):
-        if u in all_canvas_nodes and v in all_canvas_nodes:
-            weight = edata.get("weight", 1.0)
-            relation = edata.get("relation", "")
-            conf = edata.get("confidence", "EXTRACTED")
-            label = f"{relation} [{conf}]" if relation else f"[{conf}]"
-            all_edges_weighted.append((weight, u, v, label))
-
-    all_edges_weighted.sort(key=lambda x: -x[0])
-    for weight, u, v, label in all_edges_weighted[:200]:
-        canvas_edges.append({
-            "id": f"e_{u}_{v}",
-            "fromNode": f"n_{u}",
-            "toNode": f"n_{v}",
-            "label": label,
-        })
-
-    canvas_data = {"nodes": canvas_nodes, "edges": canvas_edges}
-    Path(output_path).write_text(json.dumps(canvas_data, indent=2), encoding="utf-8")
-
+    if G.number_of_nodes() <= MAX_NODES_FOR_VIZ:
+        to_html(G, communities, output_path, community_labels=community_labels)
+        return "full"
+    meta = build_meta_graph(G, communities, community_labels)
+    if 1 < meta.number_of_nodes() <= MAX_NODES_FOR_VIZ:
+        meta_communities = {cid: [str(cid)] for cid in communities}
+        member_counts = {cid: len(members) for cid, members in communities.items()}
+        to_html(meta, meta_communities, output_path,
+                community_labels=community_labels, member_counts=member_counts)
+        return "aggregated"
+    stale = Path(output_path)
+    if stale.exists():
+        stale.unlink()
+    return "skipped"
 
 def push_to_neo4j(
     G: nx.Graph,
@@ -995,72 +619,3 @@ def to_graphml(
         _sanitize(edge_attrs)
     nx.write_graphml(H, output_path)
 
-
-def to_svg(
-    G: nx.Graph,
-    communities: dict[int, list[str]],
-    output_path: str,
-    community_labels: dict[int, str] | None = None,
-    figsize: tuple[int, int] = (20, 14),
-) -> None:
-    """Export graph as an SVG file using matplotlib + spring layout.
-
-    Lightweight and embeddable - works in Obsidian notes, Notion, GitHub READMEs,
-    and any markdown renderer. No JavaScript required.
-
-    Node size scales with degree. Community colors match the HTML output.
-    """
-    try:
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import matplotlib.patches as mpatches
-    except ImportError as e:
-        raise ImportError("matplotlib not installed. Run: pip install matplotlib") from e
-
-    node_community = _node_community_map(communities)
-
-    fig, ax = plt.subplots(figsize=figsize, facecolor="#1a1a2e")
-    ax.set_facecolor("#1a1a2e")
-    ax.axis("off")
-
-    pos = nx.spring_layout(G, seed=42, k=2.0 / (G.number_of_nodes() ** 0.5 + 1))
-
-    degree = dict(G.degree())
-    max_deg = max(degree.values(), default=1) or 1
-
-    node_colors = [COMMUNITY_COLORS[node_community.get(n, 0) % len(COMMUNITY_COLORS)] for n in G.nodes()]
-    node_sizes = [300 + 1200 * (degree.get(n, 1) / max_deg) for n in G.nodes()]
-
-    # Draw edges - dashed for non-EXTRACTED
-    for u, v, data in G.edges(data=True):
-        conf = data.get("confidence", "EXTRACTED")
-        style = "solid" if conf == "EXTRACTED" else "dashed"
-        alpha = 0.6 if conf == "EXTRACTED" else 0.3
-        x0, y0 = pos[u]
-        x1, y1 = pos[v]
-        ax.plot([x0, x1], [y0, y1], color="#aaaaaa", linewidth=0.8,
-                linestyle=style, alpha=alpha, zorder=1)
-
-    nx.draw_networkx_nodes(G, pos, ax=ax, node_color=node_colors,
-                           node_size=node_sizes, alpha=0.9)
-    nx.draw_networkx_labels(G, pos, ax=ax,
-                            labels={n: G.nodes[n].get("label", n) for n in G.nodes()},
-                            font_size=7, font_color="white")
-
-    # Legend
-    if community_labels:
-        patches = [
-            mpatches.Patch(
-                color=COMMUNITY_COLORS[cid % len(COMMUNITY_COLORS)],
-                label=f"{label} ({len(communities.get(cid, []))})",
-            )
-            for cid, label in sorted(community_labels.items())
-        ]
-        ax.legend(handles=patches, loc="upper left", framealpha=0.7,
-                  facecolor="#2a2a4e", labelcolor="white", fontsize=8)
-
-    plt.tight_layout()
-    plt.savefig(output_path, format="svg", bbox_inches="tight",
-                facecolor=fig.get_facecolor())
-    plt.close(fig)

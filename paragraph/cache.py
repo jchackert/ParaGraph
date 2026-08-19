@@ -100,20 +100,6 @@ def save_cached(path: Path, result: dict, root: Path = Path(".")) -> None:
         tmp.unlink(missing_ok=True)
         raise
 
-
-def cached_files(root: Path = Path(".")) -> set[str]:
-    """Return set of file paths that have a valid cache entry (hash still matches)."""
-    d = cache_dir(root)
-    return {p.stem for p in d.glob("*.json")}
-
-
-def clear_cache(root: Path = Path(".")) -> None:
-    """Delete all graphify-out/cache/*.json files."""
-    d = cache_dir(root)
-    for f in d.glob("*.json"):
-        f.unlink()
-
-
 def check_semantic_cache(
     files: list[str],
     root: Path = Path("."),

@@ -45,11 +45,11 @@ def _rebuild_code(watch_path: Path, *, follow_symlinks: bool = False) -> bool:
         from paragraph.extract import extract
         from paragraph.detect import detect
         from paragraph.build import build_from_json
-        from paragraph.cluster import cluster, score_all
+        from paragraph.cluster import cluster, score_all, carry_over_labels
         from paragraph.analyze import god_nodes, surprising_connections, suggest_questions
         from paragraph.report import (generate, freshness_report,
                                       stable_mode_default, FRESHNESS_FILENAME)
-        from paragraph.export import to_json, to_html
+        from paragraph.export import to_json, to_html_auto
 
         detected = detect(watch_path, follow_symlinks=follow_symlinks)
         code_files = [Path(f) for f in detected['files']['code']]
@@ -64,9 +64,20 @@ def _rebuild_code(watch_path: Path, *, follow_symlinks: bool = False) -> bool:
         # AST-only rebuild replaces code nodes; doc/paper/image nodes are kept.
         out = watch_path / "graphify-out"
         existing_graph = out / "graph.json"
+        old_labels: dict[int, str] = {}
+        old_node_communities: dict[str, int] = {}
         if existing_graph.exists():
             try:
                 existing = json.loads(existing_graph.read_text(encoding="utf-8"))
+                old_labels = {
+                    int(k): v
+                    for k, v in (existing.get("graph", {}).get("community_labels") or {}).items()
+                    if str(k).lstrip("-").isdigit()
+                }
+                old_node_communities = {
+                    n["id"]: n["community"] for n in existing.get("nodes", [])
+                    if n.get("community") is not None
+                }
                 code_ids = {n["id"] for n in existing.get("nodes", []) if n.get("file_type") == "code"}
                 sem_nodes = [n for n in existing.get("nodes", []) if n.get("file_type") != "code"]
                 sem_edges = [e for e in existing.get("links", existing.get("edges", []))
@@ -95,7 +106,9 @@ def _rebuild_code(watch_path: Path, *, follow_symlinks: bool = False) -> bool:
         cohesion = score_all(G, communities)
         gods = god_nodes(G)
         surprises = surprising_connections(G, communities)
-        labels = {cid: "Community " + str(cid) for cid in communities}
+        # Deterministic member-based labels, upgraded with labels carried over
+        # from the previous graph.json (including Claude-written ones).
+        labels = carry_over_labels(G, communities, old_node_communities, old_labels)
         questions = suggest_questions(G, communities, labels)
 
         out.mkdir(exist_ok=True)
@@ -111,19 +124,18 @@ def _rebuild_code(watch_path: Path, *, follow_symlinks: bool = False) -> bool:
         # (lines 62-82) but produce fewer total nodes than the enriched graph
         # due to code-node ID churn from AST re-extraction. The safety check
         # in to_json would refuse to write, causing silent rebuild failures.
-        to_json(G, communities, str(out / "graph.json"), force=True)
+        to_json(G, communities, str(out / "graph.json"), community_labels=labels, force=True)
 
-        # to_html raises ValueError for graphs > MAX_NODES_FOR_VIZ (5000).
-        # Wrap so core outputs (graph.json + GRAPH_REPORT.md) always land.
-        html_written = False
-        try:
-            to_html(G, communities, str(out / "graph.html"), community_labels=labels or None)
-            html_written = True
-        except ValueError as viz_err:
-            print(f"[paragraph watch] Skipped graph.html: {viz_err}")
-            stale = out / "graph.html"
-            if stale.exists():
-                stale.unlink()
+        # Graphs over MAX_NODES_FOR_VIZ get an aggregated community-level
+        # graph.html instead of none; only a single oversized community skips.
+        viz = to_html_auto(G, communities, str(out / "graph.html"), community_labels=labels or None)
+        html_written = viz != "skipped"
+        if viz == "aggregated":
+            print(f"[paragraph watch] graph.html rendered as aggregated community view "
+                  f"({G.number_of_nodes()} nodes exceed the full-viz limit)")
+        elif viz == "skipped":
+            print("[paragraph watch] Skipped graph.html: graph too large for full viz "
+                  "and community structure cannot be aggregated into a useful view")
 
         # clear stale needs_update flag if present
         flag = out / "needs_update"

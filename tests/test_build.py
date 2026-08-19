@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from paragraph.build import build_from_json, build
+from paragraph.build import build_from_json
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -47,16 +47,4 @@ def test_legacy_edge_from_to_canonicalized():
                       "confidence": "EXTRACTED", "source_file": "a.py", "weight": 1.0}],
            "input_tokens": 0, "output_tokens": 0}
     G = build_from_json(ext)
-    assert G.number_of_edges() == 1
-
-
-def test_build_merges_multiple_extractions():
-    ext1 = {"nodes": [{"id": "n1", "label": "A", "file_type": "code", "source_file": "a.py"}],
-            "edges": [], "input_tokens": 0, "output_tokens": 0}
-    ext2 = {"nodes": [{"id": "n2", "label": "B", "file_type": "document", "source_file": "b.md"}],
-            "edges": [{"source": "n1", "target": "n2", "relation": "references",
-                       "confidence": "INFERRED", "source_file": "b.md", "weight": 1.0}],
-            "input_tokens": 0, "output_tokens": 0}
-    G = build([ext1, ext2])
-    assert G.number_of_nodes() == 2
     assert G.number_of_edges() == 1

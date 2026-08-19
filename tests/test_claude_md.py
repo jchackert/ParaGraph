@@ -21,7 +21,6 @@ def test_install_contains_expected_rules(tmp_path):
     claude_install(tmp_path)
     content = (tmp_path / "CLAUDE.md").read_text()
     assert "GRAPH_REPORT.md" in content
-    assert "wiki/index.md" in content
     assert "paragraph update" in content
 
 

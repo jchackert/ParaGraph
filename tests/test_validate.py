@@ -1,5 +1,5 @@
 import pytest
-from paragraph.validate import validate_extraction, assert_valid
+from paragraph.validate import validate_extraction
 
 VALID = {
     "nodes": [
@@ -85,10 +85,3 @@ def test_missing_node_field():
     }
     errors = validate_extraction(data)
     assert any("file_type" in e for e in errors)
-
-def test_assert_valid_raises_on_errors():
-    with pytest.raises(ValueError, match="error"):
-        assert_valid({"nodes": [], "edges": [], "oops": True, **{"nodes": "bad"}})
-
-def test_assert_valid_passes_silently():
-    assert_valid(VALID)  # should not raise

@@ -1,7 +1,7 @@
 """Tests for paragraph/cache.py."""
 import pytest
 from pathlib import Path
-from paragraph.cache import file_hash, cache_dir, load_cached, save_cached, cached_files, clear_cache, _body_content
+from paragraph.cache import file_hash, cache_dir, load_cached, save_cached, _body_content
 
 
 @pytest.fixture
@@ -49,30 +49,6 @@ def test_cache_miss_on_change(tmp_file, cache_root):
     # Modify the file
     tmp_file.write_text("completely different content")
     assert load_cached(tmp_file, root=cache_root) is None
-
-
-def test_cached_files(tmp_path, cache_root):
-    """cached_files returns the set of cached hashes."""
-    f1 = tmp_path / "file1.py"
-    f2 = tmp_path / "file2.py"
-    f1.write_text("alpha")
-    f2.write_text("beta")
-
-    save_cached(f1, {"nodes": [], "edges": []}, root=cache_root)
-    save_cached(f2, {"nodes": [], "edges": []}, root=cache_root)
-
-    hashes = cached_files(cache_root)
-    assert file_hash(f1, cache_root) in hashes
-    assert file_hash(f2, cache_root) in hashes
-
-
-def test_clear_cache(tmp_file, cache_root):
-    """clear_cache removes all .json files from graphify-out/cache/."""
-    save_cached(tmp_file, {"nodes": [], "edges": []}, root=cache_root)
-    assert len(list((cache_root / "graphify-out" / "cache").glob("*.json"))) > 0
-    clear_cache(cache_root)
-    assert len(list((cache_root / "graphify-out" / "cache").glob("*.json"))) == 0
-
 
 def test_md_frontmatter_only_change_same_hash(tmp_path):
     """Changing only frontmatter fields in a .md file does not change the hash."""

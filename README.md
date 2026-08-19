@@ -10,8 +10,10 @@ Type `/paragraph` in Claude Code. It reads your files, builds a knowledge graph,
 
 - **Persistent graph** -- relationships stored in `graphify-out/graph.json` survive across sessions
 - **Multimodal** -- code, PDFs, markdown, screenshots, diagrams, video, audio
-- **25 languages** via tree-sitter AST (Python, JS, TS, Go, Rust, Java, C, C++, Ruby, C#, Kotlin, Scala, PHP, Swift, Lua, Zig, PowerShell, Elixir, Objective-C, Julia, Verilog, and more)
-- **Community detection** -- Leiden/Louvain clustering identifies module boundaries
+- **16 languages** via tree-sitter AST (Python, JS, TS, Go, Rust, Java, C, C++, Ruby, C#, Kotlin, Scala, PHP, Swift, Lua, Objective-C); other languages still get semantic extraction
+- **Community detection** -- Leiden/Louvain clustering identifies module boundaries, with meaningful names that survive rebuilds (Claude-written labels persist in graph.json; LLM-free rebuilds carry them over by member overlap)
+- **Architectural analysis** -- `paragraph analyze` reports community summaries, hubs/bridges/orphans, and cross-community dependency cycles
+- **Semantic retrieval** -- `paragraph enrich` builds a local vector store (ollama embeddings); `paragraph retrieve` is the eval-tuned read path
 - **71.5x token reduction** vs reading raw files
 
 ## Install
@@ -40,6 +42,10 @@ In Claude Code:
 paragraph install              # install skill for Claude Code
 paragraph update <path>        # re-extract code (no LLM needed)
 paragraph cluster-only <path>  # rerun clustering on existing graph
+paragraph analyze [path]       # architectural analysis -> GRAPH_INSIGHTS.md
+paragraph enrich [path]        # source bodies + timestamps + vectors.db (ollama)
+paragraph retrieve "question"  # diversity-aware embedding retrieval
+paragraph ingest-claude-mem .  # inject claude-mem observations (config-driven)
 paragraph watch <path>         # watch folder, auto-rebuild on changes
 paragraph add <url>            # fetch URL content into ./raw
 paragraph clone <github-url>   # clone repo for analysis
@@ -60,16 +66,20 @@ paragraph hook uninstall  # remove
 
 All output goes to `graphify-out/` (kept for backward compatibility):
 
-- `graph.json` -- the knowledge graph (nodes, edges, communities)
-- `graph.html` -- interactive visualization
+- `graph.json` -- the knowledge graph (nodes, edges, communities, community labels)
+- `graph.html` -- interactive visualization (aggregated community view above 5,000 nodes)
 - `GRAPH_REPORT.md` -- god nodes, community structure, suggested questions
+- `GRAPH_INSIGHTS.md` -- architectural analysis (from `paragraph analyze`)
+- `vectors.db` -- embedding store for `paragraph retrieve` (from `paragraph enrich`)
 
 ## Fork changes from graphify
 
 - **Claude Code only** -- removed support for Codex, Cursor, Gemini, Aider, Kiro, and 8 other platforms
 - **LLM field normalization** -- fixes graphify 0.5.0 bugs where LLM extraction produces wrong field names (`type` vs `file_type`, `file` vs `source_file`, `type` vs `confidence` on edges)
 - **Safe code-only rebuilds** -- `watch.py` passes `force=True` to `to_json` because code-only rebuilds legitimately produce fewer nodes than enriched graphs (semantic nodes are preserved internally)
-- **Simplified CLI** -- 1507 lines down to ~680, no multi-platform install/uninstall logic
+- **Simplified CLI** -- no multi-platform install/uninstall logic
+- **Slimmed export surface** -- Obsidian/Canvas, SVG, and wiki exports removed; HTML, JSON, GraphML, and Neo4j/Cypher remain
+- **Persistent community labels** -- graph.json is the canonical label store; re-clustering carries labels over by member overlap instead of resetting to "Community N"
 
 ## License
 
