@@ -1,21 +1,70 @@
 {
   "domain_keywords": [
-    "carol", "clinical", "adhd", "para state", "ubiquitous language",
-    "scope decision", "byok", "subscription", "layer 1", "layer 2", "layer 3",
+    "carol",
+    "clinical",
+    "adhd",
+    "para state",
+    "ubiquitous language",
+    "scope decision",
+    "byok",
+    "subscription",
+    "layer 1",
+    "layer 2",
+    "layer 3",
     "apple intelligence"
   ],
-  "reviewers": ["Carol", "Sam"],
-  "passthrough_phrases": ["code review ruling", "clinical ruling", "binding"],
-  "ticket_patterns": ["\\bca-\\d+\\b"],
-  "ticket_keywords": ["ticket", "cw-", "paranote-"],
-  "passthrough_file_substrings": ["docs/clinical/"],
+  "reviewers": [
+    "Carol",
+    "Sam"
+  ],
+  "passthrough_phrases": [
+    "code review ruling",
+    "clinical ruling",
+    "binding"
+  ],
+  "ticket_patterns": [
+    "\\bca-\\d+\\b"
+  ],
+  "ticket_keywords": [
+    "ticket",
+    "cw-",
+    "paranote-"
+  ],
+  "passthrough_file_substrings": [
+    "docs/clinical/"
+  ],
   "decision_keywords": [
-    "architecture", "design pattern", "layer 1", "layer 2", "layer 3",
-    "swiftdata", "intelligence stack", "classification",
-    "capture flow", "consent flow", "offline"
+    "architecture",
+    "design pattern",
+    "layer 1",
+    "layer 2",
+    "layer 3",
+    "swiftdata",
+    "intelligence stack",
+    "classification",
+    "capture flow",
+    "consent flow",
+    "offline"
   ],
   "dedup_ignore_names": [
-    "sam", "greg", "peter", "alice", "tiger", "cindy", "bobby",
-    "mike", "carol", "jordan"
-  ]
+    "sam",
+    "greg",
+    "peter",
+    "alice",
+    "tiger",
+    "cindy",
+    "bobby",
+    "mike",
+    "carol",
+    "jordan"
+  ],
+  "resolution_keywords": [
+    "created",
+    "resolved",
+    "fixed",
+    "shipped",
+    "plan",
+    "approved"
+  ],
+  "drop_unlinked": true
 }

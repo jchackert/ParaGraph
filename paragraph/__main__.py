@@ -313,6 +313,7 @@ def main() -> None:
         print("    --config <path>         filtering vocabulary JSON (default: graphify-out/ingest-config.json")
         print("                            or ~/.paragraph/ingest-config.json; see docs/examples/paranote-ingest.json)")
         print("  cluster-only <path>     rerun clustering on an existing graph.json and regenerate report")
+        print("  connect-chunks [path]   link orphaned doc/rationale chunks to per-file parent nodes")
         print("  analyze [path]          architectural analysis: community summaries, hubs/bridges/orphans,")
         print("                          cross-community dependency cycles -> graphify-out/GRAPH_INSIGHTS.md")
         print("  serve [path|graph.json] start the MCP stdio server (query_graph, retrieve, insights, ...)")
@@ -621,6 +622,23 @@ def main() -> None:
         out_path.write_text(md, encoding="utf-8")
         print(md)
         print(f"Written to {out_path}")
+
+    elif cmd == "connect-chunks":
+        watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")
+        graph_json = watch_path / "graphify-out" / "graph.json"
+        if not graph_json.exists():
+            print(f"error: no graph found at {graph_json} — run /paragraph first", file=sys.stderr)
+            sys.exit(1)
+        from paragraph.build import connect_orphan_chunks
+        data = json.loads(graph_json.read_text(encoding="utf-8"))
+        data, stats = connect_orphan_chunks(data)
+        if stats["linked"] == 0:
+            print("No orphaned document/rationale chunks found — nothing to connect.")
+            sys.exit(0)
+        graph_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        print(f"Linked {stats['linked']} orphaned chunk(s) across {stats['files']} file(s) "
+              f"({stats['file_nodes_created']} file node(s) created).")
+        print(f"Run `paragraph cluster-only {watch_path}` to re-cluster and refresh the report/viz.")
 
     elif cmd == "serve":
         graph_arg = sys.argv[2] if len(sys.argv) > 2 else "graphify-out/graph.json"

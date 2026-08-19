@@ -2,6 +2,13 @@
 
 ## 0.2.0
 
+### Graph hygiene (pollution cleanup)
+
+- **Fix: label dedup no longer collapses code across files** -- `deduplicate_by_label` scoped code nodes (and bare-callable labels like `main()`) to their `source_file`; merging every script's `main()`/`run()` into one node had corrupted god nodes and surprising-connection analysis (389 bad merges observed in a real corpus). Concept/document dedup across chunks unchanged
+- **`paragraph connect-chunks`** -- links orphaned document/rationale chunks to a per-file parent node with `part_of` edges, so a chunk-ingested file clusters as one community instead of hundreds of singletons; RAG content untouched
+- **Aggregated viz collapses orphan noise** -- communities whose members are all disconnected render as one grey "Unconnected content (N nodes)" meta-node instead of a ring of dots
+- **Ingest: `drop_unlinked` + `resolution_keywords`** -- observations whose file references resolve to nothing can be dropped at the door (they cannot aid traversal), and ticket-resolution passthrough words are configurable; keyword matching is now word-boundary based ("plan" no longer fires on "Plane")
+
 ### Added
 
 - **Path-based observation linking** -- `ingest-claude-mem` matches observation file paths against node `source_file` (exact, then unambiguous suffix) before falling back to filename stems; same-named files in different directories no longer mis-link

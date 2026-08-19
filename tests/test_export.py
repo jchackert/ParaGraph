@@ -227,3 +227,30 @@ def test_to_html_auto_aggregated_writes_drilldown_pages(monkeypatch):
             assert f"graph_communities/community_{cid}.html" in overview
         page = pages[0].read_text()
         assert "Overview</a>" in page and "vis-network" in page
+
+
+def test_to_html_auto_collapses_unconnected_singletons(monkeypatch):
+    import networkx as nx
+    import paragraph.export as export_mod
+    G = nx.Graph()
+    # two connected communities
+    for n in ("a1", "a2", "b1", "b2"):
+        G.add_node(n, label=n)
+    G.add_edge("a1", "a2"); G.add_edge("b1", "b2"); G.add_edge("a1", "b1")
+    communities = {0: ["a1", "a2"], 1: ["b1", "b2"]}
+    # 30 orphan singleton communities
+    for i in range(30):
+        nid = f"orphan{i}"
+        G.add_node(nid, label=f"Ticket {i} marked complete")
+        communities[100 + i] = [nid]
+    monkeypatch.setattr(export_mod, "MAX_NODES_FOR_VIZ", 10)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "graph.html"
+        assert export_mod.to_html_auto(G, communities, str(out)) == "aggregated"
+        content = out.read_text()
+        assert "Unconnected content (30 nodes)" in content
+        # orphan community labels do not spam the overview
+        assert "Ticket 5 marked complete" not in content
+        # connected communities still get drill-down pages
+        pages = list((Path(tmp) / "graph_communities").glob("community_*.html"))
+        assert len(pages) == 2

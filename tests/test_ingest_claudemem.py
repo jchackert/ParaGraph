@@ -342,3 +342,61 @@ def test_stem_fallback_still_works():
     path_index = build_path_index(nodes)  # empty — no source paths
     stem_index = build_stem_index(nodes)
     assert file_path_to_node_id("lib/session.py", stem_index, path_index) == "session_manager"
+
+
+def test_status_only_ticket_update_does_not_pass_through():
+    """Word-boundary matching: 'plan' must not fire on 'Plane' (the tracker),
+    so a bare ticket-status update no longer rides the resolution passthrough."""
+    from paragraph.ingest_claudemem import IngestConfig, filter_observation
+    cfg = IngestConfig(ticket_keywords=["ticket", "ca-"])
+    status_obs = {
+        "id": 10, "type": "change",
+        "title": "CA-5 marked complete in Plane",
+        "narrative": "Ticket CA-5 was marked complete in Plane after verification. " * 2,
+        "files_modified": "[]",
+    }
+    keep, _, reason = filter_observation(status_obs, cfg)
+    assert reason != "passthrough" and keep is False
+
+    # positive control: a genuine resolution with substance still passes
+    real_obs = {
+        "id": 11, "type": "change",
+        "title": "CA-7 resolved: capture flow race",
+        "narrative": "Ticket CA-7 resolved. Root cause was a race in the capture flow init. " * 2,
+        "files_modified": "[]",
+    }
+    keep, _, reason = filter_observation(real_obs, cfg)
+    assert keep is True and reason == "passthrough"
+
+
+def test_drop_unlinked_skips_observation_without_file_matches(tmp_path, monkeypatch):
+    import json as _json
+    import sqlite3
+    from paragraph.ingest_claudemem import run
+
+    db = tmp_path / "claude-mem.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute("""CREATE TABLE observations (
+        id INTEGER PRIMARY KEY, title TEXT, subtitle TEXT, narrative TEXT,
+        facts TEXT, concepts TEXT, files_read TEXT, files_modified TEXT,
+        type TEXT, agent_id TEXT, agent_type TEXT, created_at TEXT, project TEXT)""")
+    long_narr = "This is an architectural decision about the design pattern and root cause. " * 3
+    conn.execute("INSERT INTO observations VALUES (1, 'Linked decision', '', ?, '', '', ?, '[]', 'decision', '', '', '2026-01-01', 'proj')",
+                 (long_narr, _json.dumps(["src/app.py"])))
+    conn.execute("INSERT INTO observations VALUES (2, 'Agent frontmatter decision architecture', '', ?, '', '', ?, '[]', 'decision', '', '', '2026-01-02', 'proj')",
+                 (long_narr, _json.dumps([".claude/agents/tiger.md"])))
+    conn.commit(); conn.close()
+
+    proj = tmp_path / "proj"
+    (proj / "graphify-out").mkdir(parents=True)
+    graph = {"nodes": [{"id": "app_py", "label": "app.py", "file_type": "code",
+                        "source_file": "src/app.py", "community": 0}],
+             "links": []}
+    (proj / "graphify-out" / "graph.json").write_text(_json.dumps(graph))
+    (proj / "graphify-out" / "ingest-config.json").write_text(_json.dumps({"drop_unlinked": True}))
+
+    assert run(proj, db_path=db, project="proj") == 0
+    out = _json.loads((proj / "graphify-out" / "graph.json").read_text())
+    ids = {n["id"] for n in out["nodes"]}
+    assert "claudemem_1" in ids       # linked -> kept
+    assert "claudemem_2" not in ids   # unlinked -> dropped

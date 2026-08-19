@@ -521,8 +521,19 @@ def to_html_auto(
     if G.number_of_nodes() <= MAX_NODES_FOR_VIZ:
         to_html(G, communities, output_path, community_labels=community_labels)
         return "full"
-    meta = build_meta_graph(G, communities, community_labels)
-    if 1 < meta.number_of_nodes() <= MAX_NODES_FOR_VIZ:
+    # Communities whose members are all disconnected (orphan content) render
+    # as one collapsed meta-node, not a ring of identical dots.
+    degree = dict(G.degree())
+    connected = {cid: m for cid, m in communities.items()
+                 if any(degree.get(n, 0) > 0 for n in m)}
+    unconnected_count = sum(len(m) for cid, m in communities.items()
+                            if cid not in connected)
+    if not connected:
+        connected = communities
+        unconnected_count = 0
+
+    meta = build_meta_graph(G, connected, community_labels)
+    if 1 < meta.number_of_nodes() + (1 if unconnected_count else 0) <= MAX_NODES_FOR_VIZ:
         # Drill-down pages: one full-featured viz per community, linked from
         # the overview (double-click a community node to open it).
         out_file = Path(output_path)
@@ -530,9 +541,9 @@ def to_html_auto(
         pages_dir.mkdir(parents=True, exist_ok=True)
         for stale in pages_dir.glob("community_*.html"):
             stale.unlink()
-        labels = community_labels or {}
+        labels = dict(community_labels or {})
         pages = 0
-        for cid, members in communities.items():
+        for cid, members in connected.items():
             if not 1 < len(members) <= MAX_NODES_FOR_VIZ:
                 continue
             page = pages_dir / f"community_{cid}.html"
@@ -542,10 +553,19 @@ def to_html_auto(
             meta.nodes[str(cid)]["href"] = f"graph_communities/{page.name}"
             pages += 1
 
-        meta_communities = {cid: [str(cid)] for cid in communities}
-        member_counts = {cid: len(members) for cid, members in communities.items()}
+        meta_communities = {cid: [str(cid)] for cid in connected}
+        member_counts = {cid: len(members) for cid, members in connected.items()}
+        if unconnected_count:
+            # Synthetic cid chosen so cid % len(palette) lands on the grey swatch
+            top = max(connected, default=0)
+            syn_cid = ((top // len(COMMUNITY_COLORS)) + 1) * len(COMMUNITY_COLORS) - 1
+            syn_label = f"Unconnected content ({unconnected_count} nodes)"
+            meta.add_node("__unconnected__", label=syn_label)
+            meta_communities[syn_cid] = ["__unconnected__"]
+            member_counts[syn_cid] = unconnected_count
+            labels[syn_cid] = syn_label
         to_html(meta, meta_communities, output_path,
-                community_labels=community_labels, member_counts=member_counts)
+                community_labels=labels or None, member_counts=member_counts)
         if pages:
             print(f"[paragraph] {pages} community drill-down pages in {pages_dir}/ "
                   "(double-click a community in the overview)")

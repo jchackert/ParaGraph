@@ -54,6 +54,16 @@ class IngestConfig:
     passthrough_phrases: list[str] = field(default_factory=lambda: ["code review ruling"])
     ticket_patterns: list[str] = field(default_factory=list)
     ticket_keywords: list[str] = field(default_factory=lambda: ["ticket"])
+    # Resolution words that, combined with a ticket keyword, trigger passthrough.
+    # Trim status-only words ("marked done", "completed", "closed") to keep
+    # bare ticket-status updates out of the graph.
+    resolution_keywords: list[str] = field(default_factory=lambda: [
+        "created", "resolved", "closed", "fixed", "shipped",
+        "plan", "approved", "marked done", "completed",
+    ])
+    # Drop observations whose file references resolve to no graph node —
+    # they cannot aid traversal and render as disconnected singletons.
+    drop_unlinked: bool = False
     passthrough_file_substrings: list[str] = field(default_factory=list)
     decision_keywords: list[str] = field(default_factory=lambda: [
         "architecture", "design pattern",
@@ -135,13 +145,12 @@ def _is_passthrough(obs: dict, cfg: IngestConfig) -> bool:
     ):
         return True
 
-    # Ticket work with resolution context (preserves what was decided and why)
-    if any(word in text_lower for word in cfg.ticket_keywords) and any(
-        word in text_lower for word in (
-            "created", "resolved", "closed", "fixed", "shipped",
-            "plan", "approved", "marked done", "completed",
-        )
-    ):
+    # Ticket work with resolution context (preserves what was decided and why).
+    # Word-boundary matching: "plan" must not fire on "Plane" (the tracker).
+    def _word_hit(words: list[str]) -> bool:
+        return any(re.search(r"\b" + re.escape(w) + r"\b", text_lower) for w in words)
+
+    if _word_hit(cfg.ticket_keywords) and _word_hit(cfg.resolution_keywords):
         return True
 
     # Architecture, design, or pattern decisions with codebase impact
@@ -640,11 +649,16 @@ def run(
     new_nodes: list[dict] = []
     new_edges: list[dict] = []
     total_skipped = 0
+    dropped_unlinked = 0
 
     for obs in deduped_obs:
-        node = observation_to_node(obs)
-        new_nodes.append(node)
         edges, skipped = observation_to_edges(obs, stem_index, path_index)
+        if cfg.drop_unlinked and not edges:
+            dropped_unlinked += 1
+            print(f"  UNLINKED dropped id={obs['id']} "
+                  f"title={repr((obs.get('title') or '')[:60])}", file=sys.stderr)
+            continue
+        new_nodes.append(observation_to_node(obs))
         new_edges.extend(edges)
         total_skipped += skipped
 
@@ -660,6 +674,8 @@ def run(
     print()
     print("Injection complete.")
     print(f"  Observations injected    : {len(new_nodes)}")
+    if cfg.drop_unlinked:
+        print(f"  Dropped (no file links)  : {dropped_unlinked}")
     print(f"  Edges created            : {len(new_edges)}")
     print(f"  Edges skipped (no match) : {total_skipped}")
     print(f"  Total nodes now          : {len(graph['nodes'])}")

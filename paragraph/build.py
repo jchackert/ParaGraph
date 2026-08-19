@@ -143,21 +143,43 @@ def _norm_label(label: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", label.lower()).strip()
 
 
+_BARE_CALLABLE = re.compile(r"^\.?\w+\(\)$")  # main(), run(), .method()
+
+
+def _dedup_key(node: dict) -> tuple[str, str] | None:
+    """Dedup key for one node: normalised label, plus source_file for code.
+
+    Code nodes (and anything labelled like a bare callable) only merge with
+    duplicates from the SAME file — every Python script has a main(), and
+    merging them across files invents cross-script edges that corrupt god
+    nodes and surprising-connection analysis. Concept/document nodes merge
+    by label alone, which is the cross-chunk dedup this function exists for.
+    """
+    label_key = _norm_label(str(node.get("label", node.get("id", ""))))
+    if not label_key:
+        return None
+    ftype = node.get("file_type") or node.get("type")
+    code_like = ftype == "code" or bool(_BARE_CALLABLE.match(str(node.get("label") or "")))
+    if code_like:
+        return (label_key, str(node.get("source_file") or node.get("file") or ""))
+    return (label_key, "")
+
+
 def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dict], list[dict]]:
     """Merge nodes that share a normalised label, rewriting edge references.
 
     Prefers IDs without chunk suffixes (_c\\d+) and shorter IDs when tied.
     Drops self-loops created by the merge. Intended for semantic-extraction
-    results only (the skill's chunk-merge step) — AST nodes carry generic
-    labels like "init" that must never be merged across files.
+    results only (the skill's chunk-merge step). Code nodes and bare
+    callable labels are scoped to their source_file — see _dedup_key.
     """
     _CHUNK_SUFFIX = re.compile(r"_c\d+$")
-    canonical: dict[str, dict] = {}  # norm_label -> surviving node
-    remap: dict[str, str] = {}       # old_id -> surviving_id
+    canonical: dict[tuple[str, str], dict] = {}  # dedup key -> surviving node
+    remap: dict[str, str] = {}                   # old_id -> surviving_id
 
     for node in nodes:
-        key = _norm_label(node.get("label", node.get("id", "")))
-        if not key:
+        key = _dedup_key(node)
+        if key is None:
             continue
         existing = canonical.get(key)
         if existing is None:
@@ -189,3 +211,74 @@ def deduplicate_by_label(nodes: list[dict], edges: list[dict]) -> tuple[list[dic
         if e["source"] != e["target"]:
             deduped_edges.append(e)
     return deduped_nodes, deduped_edges
+
+
+def connect_orphan_chunks(graph_data: dict) -> tuple[dict, dict]:
+    """Link orphaned doc/rationale chunks to a per-file parent node.
+
+    Chunk-ingested documents (e.g. a rulings file split into 100+ chunks)
+    arrive with no edges, so each chunk becomes its own community and the
+    viz fills with singleton dots. This adds `part_of` edges from every
+    orphaned document/rationale node to an anchor node for its source file
+    (the file's highest-degree existing node, or a new file-level node), so
+    a chunked file clusters as one community. Code and observation nodes are
+    left alone. Returns (graph_data, stats); mutates graph_data in place.
+    """
+    nodes = graph_data.get("nodes", [])
+    links = graph_data.setdefault("links", [])
+
+    degree: dict[str, int] = {}
+    for e in links:
+        degree[e.get("source")] = degree.get(e.get("source"), 0) + 1
+        degree[e.get("target")] = degree.get(e.get("target"), 0) + 1
+
+    by_file: dict[str, list[dict]] = {}
+    for n in nodes:
+        sf = n.get("source_file")
+        if sf and sf != "<synthesized>":
+            by_file.setdefault(str(sf), []).append(n)
+
+    linked = 0
+    files_touched = 0
+    created = 0
+    for sf, file_nodes in by_file.items():
+        orphans = [n for n in file_nodes
+                   if degree.get(n["id"], 0) == 0
+                   and n.get("file_type") in ("document", "rationale")]
+        if not orphans:
+            continue
+        anchored = [n for n in file_nodes if degree.get(n["id"], 0) > 0]
+        if anchored:
+            anchor = max(anchored, key=lambda n: degree.get(n["id"], 0))
+        else:
+            anchor_id = "file_" + _normalize_id(sf)
+            existing = next((n for n in nodes if n["id"] == anchor_id), None)
+            if existing is None:
+                anchor = {
+                    "id": anchor_id,
+                    "label": Path(sf).name,
+                    "file_type": "document",
+                    "source_file": sf,
+                }
+                nodes.append(anchor)
+                created += 1
+            else:
+                anchor = existing
+        for n in orphans:
+            if n["id"] == anchor["id"]:
+                continue
+            links.append({
+                "source": n["id"],
+                "target": anchor["id"],
+                "relation": "part_of",
+                "confidence": "EXTRACTED",
+                "confidence_score": 1.0,
+                "source_file": sf,
+                "weight": 1.0,
+                "_src": n["id"],
+                "_tgt": anchor["id"],
+            })
+            linked += 1
+        files_touched += 1
+
+    return graph_data, {"files": files_touched, "linked": linked, "file_nodes_created": created}
