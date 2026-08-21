@@ -337,6 +337,19 @@ def build_embed_text(node: dict, children_index: dict[str, list[str]] | None = N
 
     elif ft == "document":
         parts.append(f"Document: {node.get('label', '')}")
+        # Chunk-ingested documents carry their chunk text in source_body.
+        # Without this, re-embedding here CLOBBERED the rich chunk embeddings
+        # an ingester had stored, silently degrading document retrieval to
+        # label-only matching.
+        body = node.get("source_body", "")
+        if body:
+            parts.append(body)
+
+    elif ft == "rationale":
+        parts.append(f"Rationale: {node.get('label', '')}")
+        body = node.get("source_body", "")
+        if body:
+            parts.append(body)
 
     else:
         parts.append(node.get("label", ""))

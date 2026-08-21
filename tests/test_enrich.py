@@ -94,6 +94,23 @@ def test_container_embed_text_includes_members(tmp_path):
     assert "Members:" in text and ".login()" in text
 
 
+def test_document_embed_text_includes_chunk_body():
+    # Regression: label-only document embeds clobbered rich chunk embeddings
+    node = {"id": "doc_x_0", "label": "spec.md: Overview", "file_type": "document",
+            "source_body": "The capture queue persists locally and syncs later."}
+    text = build_embed_text(node)
+    assert "Document: spec.md: Overview" in text
+    assert "persists locally" in text
+
+
+def test_rationale_embed_text_includes_body():
+    node = {"id": "memfact_x", "label": "Launch pushed to May 1", "file_type": "rationale",
+            "source_body": "PM-1 through PM-5 are launch blockers."}
+    text = build_embed_text(node)
+    assert text.startswith("Rationale: Launch pushed to May 1")
+    assert "launch blockers" in text
+
+
 def test_run_bodies_only_no_ollama(tmp_path):
     make_project(tmp_path)
     assert run(tmp_path, bodies_only=True) == 0
