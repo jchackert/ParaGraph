@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Architecture hardening (post-review batch)
+
+- **`paragraph/schema.py`** -- the graph.json data contract in one place: canonical file-type/confidence/relation vocabularies plus edge accessors (`edge_endpoints`, `edge_list`, ...) replacing the per-module `source`/`target`-vs-`_src`/`_tgt` fallback dance. `build_from_json` now warns on relation-vocabulary drift, and tests assert skill.md's relation enums stay in sync with the code vocabulary
+- **argparse CLI** -- the hand-rolled dispatcher silently ignored unknown flags (a typo'd `--threshold` did nothing); now argparse subparsers with an identical 24-command surface, and unknown commands/flags error with exit 2
+- **`paragraph rebuild`** -- the canonical code-only pipeline (update -> ingest-claude-mem -> connect-chunks -> prune-generic -> cluster -> enrich -> link -> re-cluster) as one command; optional steps skip gracefully when their prerequisites (claude-mem DB, ollama, vectors.db) are missing. `cluster-only` now delegates to the same `recluster()` implementation
+- **`paragraph/languages/` package** -- language configs, import handlers, and per-language walk helpers split out of the 2,562-line extract.py; public API unchanged
+- **Fix: document/rationale embeddings include `source_body`** -- enrich re-embedded document nodes with label-only text, clobbering the rich chunk embeddings the ingest path had stored and silently degrading document retrieval to label matching
+
 ### Graph quality: cross-domain bridging, generic-symbol cleanup, Swift reference coverage
 
 - **`paragraph link`** -- embedding-based doc<->code bridging. For each document/rationale node, finds the most-similar code nodes in vectors.db (cosine, default threshold 0.78, top-k 3) and writes `conceptually_related_to` INFERRED edges tagged `origin: paragraph-link`; edges are replaced wholesale per run (idempotent). Pairs that already have a more precise edge are skipped. Optional numpy fast path (`paragraph[link]`); the pure-Python fallback refuses workloads over 500k pairs instead of hanging
