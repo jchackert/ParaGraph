@@ -580,59 +580,24 @@ def _cmd_enrich(ns: argparse.Namespace) -> None:
 
 
 def _cmd_cluster_only(ns: argparse.Namespace) -> None:
-    watch_path = ns.path
-    graph_json = watch_path / "graphify-out" / "graph.json"
-    if not graph_json.exists():
-        print(f"error: no graph found at {graph_json} — run /paragraph first", file=sys.stderr)
-        sys.exit(1)
-    from networkx.readwrite import json_graph as _jg
-    from paragraph.build import build_from_json
-    from paragraph.cluster import cluster, score_all
-    from paragraph.analyze import god_nodes, surprising_connections, suggest_questions
-    from paragraph.report import (generate, freshness_report, root_label,
-                                  stable_mode_default, FRESHNESS_FILENAME)
-    from paragraph.export import to_json, to_html_auto
-    print("Loading existing graph...")
-    _raw = json.loads(graph_json.read_text(encoding="utf-8"))
-    G = build_from_json(_raw)
-    print(f"Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
-    print("Re-clustering...")
-    communities = cluster(G)
-    cohesion = score_all(G, communities)
-    gods = god_nodes(G)
-    surprises = surprising_connections(G, communities)
-    from paragraph.cluster import carry_over_labels
-    old_labels = {
-        int(k): v
-        for k, v in (_raw.get("graph", {}).get("community_labels") or {}).items()
-        if str(k).lstrip("-").isdigit()
-    }
-    old_node_communities = {
-        n["id"]: n["community"] for n in _raw.get("nodes", [])
-        if n.get("community") is not None
-    }
-    labels = carry_over_labels(G, communities, old_node_communities, old_labels)
-    questions = suggest_questions(G, communities, labels)
-    tokens = {"input": 0, "output": 0}
-    report = generate(G, communities, cohesion, labels, gods, surprises,
-                      {"warning": "cluster-only mode — file stats not available"},
-                      tokens, root_label(watch_path), suggested_questions=questions)
-    out = watch_path / "graphify-out"
-    (out / "GRAPH_REPORT.md").write_text(report, encoding="utf-8")
-    if stable_mode_default(out, str(watch_path)):
-        (out / FRESHNESS_FILENAME).write_text(
-            freshness_report(
-                {"warning": "cluster-only mode — file stats not available"},
-                root_label(watch_path), out_dir=out),
-            encoding="utf-8")
-    to_json(G, communities, str(out / "graph.json"), community_labels=labels)
-    from paragraph.insights import record_history
-    record_history(out, G, communities)
-    viz = to_html_auto(G, communities, str(out / "graph.html"), community_labels=labels or None)
-    if viz == "aggregated":
-        print("Graph too large for full viz — graph.html shows the aggregated community view.")
-    html_part = " graph.json and graph.html" if viz != "skipped" else " and graph.json"
-    print(f"Done — {len(communities)} communities. GRAPH_REPORT.md,{html_part} updated.")
+    # Delegates to rebuild.recluster so the standalone command and the
+    # rebuild pipeline share one implementation and cannot drift.
+    from paragraph.rebuild import recluster
+    sys.exit(recluster(ns.path))
+
+
+def _cmd_rebuild(ns: argparse.Namespace) -> None:
+    from paragraph.rebuild import run as _run_rebuild
+    sys.exit(_run_rebuild(
+        ns.path,
+        db=ns.db,
+        project=ns.project,
+        skip_ingest=ns.skip_ingest,
+        skip_enrich=ns.skip_enrich,
+        skip_link=ns.skip_link,
+        link_threshold=ns.link_threshold,
+        link_top_k=ns.link_top_k,
+    ))
 
 
 def _cmd_update(ns: argparse.Namespace) -> None:
@@ -813,6 +778,28 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="rerun clustering on an existing graph.json and regenerate report")
     p.add_argument("path", nargs="?", type=Path, default=Path("."))
     p.set_defaults(func=_cmd_cluster_only)
+
+    p = sub.add_parser("rebuild",
+                       help="full code-only rebuild in the canonical order: update -> "
+                            "ingest-claude-mem -> connect-chunks -> prune-generic -> cluster "
+                            "-> enrich -> link -> re-cluster (no LLM; optional steps skip "
+                            "gracefully when prerequisites are missing)")
+    p.add_argument("path", nargs="?", type=Path, default=Path("."))
+    p.add_argument("--db", type=Path, default=None,
+                   help="claude-mem SQLite DB (default ~/.claude-mem/claude-mem.db)")
+    p.add_argument("--project", default=None,
+                   help="claude-mem project name (default: basename of <path>)")
+    p.add_argument("--skip-ingest", action="store_true",
+                   help="skip the claude-mem observation step")
+    p.add_argument("--skip-enrich", action="store_true",
+                   help="skip bodies/timestamps/embeddings (no ollama needed)")
+    p.add_argument("--skip-link", action="store_true",
+                   help="skip embedding doc<->code bridging")
+    p.add_argument("--link-threshold", type=float, default=None, metavar="X",
+                   help="cosine threshold for the link step (default: link's own default)")
+    p.add_argument("--link-top-k", type=int, default=None, metavar="N",
+                   help="max code links per source node (default: link's own default)")
+    p.set_defaults(func=_cmd_rebuild)
 
     p = sub.add_parser("connect-chunks",
                        help="link orphaned doc/rationale chunks to per-file parent nodes")
