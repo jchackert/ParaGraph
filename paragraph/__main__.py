@@ -314,6 +314,17 @@ def main() -> None:
         print("                            or ~/.paragraph/ingest-config.json; see docs/examples/paranote-ingest.json)")
         print("  cluster-only <path>     rerun clustering on an existing graph.json and regenerate report")
         print("  connect-chunks [path]   link orphaned doc/rationale chunks to per-file parent nodes")
+        print("  prune-generic [path]    merge shadow nodes into real definitions and drop generic")
+        print("                          stdlib/framework symbols (Sendable, View, str, ...) from graph.json")
+        print("    --also a,b,c            additional labels to treat as generic (case-insensitive)")
+        print("    --keep a,b,c            labels to exempt from the built-in stoplist")
+        print("    --dry-run               report what would change without writing")
+        print("  link [path]             embedding-based doc<->code bridging: add conceptually_related_to")
+        print("                          edges from document/rationale nodes to their most-similar code nodes")
+        print("    --threshold X           minimum cosine similarity (default 0.78)")
+        print("    --top-k N               max code links per source node (default 3)")
+        print("    --types a,b             source file_types to link (default document,rationale)")
+        print("    --dry-run               report what would be linked without writing")
         print("  analyze [path]          architectural analysis: community summaries, hubs/bridges/orphans,")
         print("                          cross-community dependency cycles -> graphify-out/GRAPH_INSIGHTS.md")
         print("  advise [path]           Swift coding-standards advice from the graph -> graphify-out/ADVICE.md")
@@ -646,6 +657,76 @@ def main() -> None:
         print(f"Linked {stats['linked']} orphaned chunk(s) across {stats['files']} file(s) "
               f"({stats['file_nodes_created']} file node(s) created).")
         print(f"Run `paragraph cluster-only {watch_path}` to re-cluster and refresh the report/viz.")
+
+    elif cmd == "prune-generic":
+        args = sys.argv[2:]
+        watch_path = Path(".")
+        extra: set[str] = set()
+        keep: set[str] = set()
+        dry_run = False
+        i = 0
+        while i < len(args):
+            if args[i] == "--also" and i + 1 < len(args):
+                extra |= {s.strip().lower() for s in args[i + 1].split(",") if s.strip()}
+                i += 2
+            elif args[i] == "--keep" and i + 1 < len(args):
+                keep |= {s.strip().lower() for s in args[i + 1].split(",") if s.strip()}
+                i += 2
+            elif args[i] == "--dry-run":
+                dry_run = True; i += 1
+            elif not args[i].startswith("--"):
+                watch_path = Path(args[i]); i += 1
+            else:
+                i += 1
+        graph_json = watch_path / "graphify-out" / "graph.json"
+        if not graph_json.exists():
+            print(f"error: no graph found at {graph_json} — run /paragraph first", file=sys.stderr)
+            sys.exit(1)
+        from paragraph.stoplist import prune_generic
+        data = json.loads(graph_json.read_text(encoding="utf-8"))
+        n_before = len(data.get("nodes", []))
+        e_before = len(data.get("links", data.get("edges", [])))
+        data, stats = prune_generic(data, extra_stoplist=frozenset(extra), keep=frozenset(keep))
+        n_after = len(data.get("nodes", []))
+        e_after = len(data.get("links", data.get("edges", [])))
+        print(f"Shadow nodes merged into real definitions: {stats['merged']} "
+              f"({stats['edges_remapped']} edge(s) remapped)")
+        print(f"Generic symbols dropped: {stats['dropped']}")
+        print(f"Nodes: {n_before} -> {n_after} | Edges: {e_before} -> {e_after}")
+        if dry_run:
+            print("Dry run — graph.json not modified.")
+            sys.exit(0)
+        if stats["merged"] == 0 and stats["dropped"] == 0:
+            print("Nothing to prune.")
+            sys.exit(0)
+        graph_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        print(f"Run `paragraph cluster-only {watch_path}` to re-cluster and refresh the report/viz.")
+
+    elif cmd == "link":
+        args = sys.argv[2:]
+        watch_path = Path(".")
+        threshold = 0.78
+        top_k = 3
+        types = ("document", "rationale")
+        dry_run = False
+        i = 0
+        while i < len(args):
+            if args[i] == "--threshold" and i + 1 < len(args):
+                threshold = float(args[i + 1]); i += 2
+            elif args[i] == "--top-k" and i + 1 < len(args):
+                top_k = int(args[i + 1]); i += 2
+            elif args[i] == "--types" and i + 1 < len(args):
+                types = tuple(s.strip() for s in args[i + 1].split(",") if s.strip())
+                i += 2
+            elif args[i] == "--dry-run":
+                dry_run = True; i += 1
+            elif not args[i].startswith("--"):
+                watch_path = Path(args[i]); i += 1
+            else:
+                i += 1
+        from paragraph.link import run as _run_link
+        sys.exit(_run_link(watch_path, threshold=threshold, top_k=top_k,
+                           source_types=types, dry_run=dry_run))
 
     elif cmd == "serve":
         graph_arg = sys.argv[2] if len(sys.argv) > 2 else "graphify-out/graph.json"

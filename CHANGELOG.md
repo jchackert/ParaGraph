@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Graph quality: cross-domain bridging, generic-symbol cleanup, Swift reference coverage
+
+- **`paragraph link`** -- embedding-based doc<->code bridging. For each document/rationale node, finds the most-similar code nodes in vectors.db (cosine, default threshold 0.78, top-k 3) and writes `conceptually_related_to` INFERRED edges tagged `origin: paragraph-link`; edges are replaced wholesale per run (idempotent). Pairs that already have a more precise edge are skipped. Optional numpy fast path (`paragraph[link]`); the pure-Python fallback refuses workloads over 500k pairs instead of hanging
+- **Symbol stoplist + shadow-node resolution** (`paragraph/stoplist.py`) -- the extractors synthesized a bare node (empty `source_file`) for every unresolved conformance/inheritance target, turning Sendable/View/String/str into cross-community god nodes (observed: one `Sendable` node with 101 edges spanning 10 communities). Now, at the end of every extraction: bare nodes whose label matches a real project type are **merged** into that definition (recovering the cross-file inherits edge that used to land on a duplicate), and remaining bare nodes matching the built-in stoplist are **dropped**. `paragraph prune-generic` applies the same pass to an existing graph.json (`--also`/`--keep`/`--dry-run`)
+- **Swift reference extraction** -- the call-graph pass only walked named function bodies, so a SwiftUI app's densest reference sites were invisible. Now extracted: calls in property initializers (`@State var x = Coordinator()`) and computed-property bodies (`var body: some View { ... }`), both attributed to the enclosing type; plus `references` INFERRED edges for type annotations (`var zone: AttentionZone`) and metatype uses (`[Person.self]`), deduped per referrer and stoplist-filtered. In a real corpus this un-isolates model/service types that were referenced only from these sites
+- **Cross-file call resolution prefers real definitions** -- label collisions between a synthesized shadow node and a real definition now resolve to the real one
+- **AST cache versioning** -- per-file AST cache entries are stamped with an extractor version and re-extracted when the extractor changes; semantic (LLM) cache entries are untouched, so no re-extraction cost
+
 ## 0.2.0
 
 ### Swift architecture visualization + standards advisor

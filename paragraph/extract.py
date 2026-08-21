@@ -11,6 +11,13 @@ from typing import Callable, Any
 from .cache import load_cached, save_cached
 
 
+# Bump when AST extraction output changes shape or coverage, so stale
+# per-file cache entries (keyed on file content, not extractor code) are
+# re-extracted. Only entries carrying a raw_calls key (AST results) are
+# affected — semantic LLM cache entries are never invalidated by this.
+_AST_EXTRACTOR_VERSION = 2
+
+
 def _make_id(*parts: str) -> str:
     """Build a stable node ID from one or more name parts."""
     combined = "_".join(p.strip("_.") for p in parts if p)
@@ -406,7 +413,7 @@ def _csharp_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: 
 def _swift_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: str,
                       nodes: list, edges: list, seen_ids: set, function_bodies: list,
                       parent_class_nid: str | None, add_node_fn, add_edge_fn) -> bool:
-    """Handle enum_entry for Swift. Returns True if handled."""
+    """Handle enum_entry and property_declaration for Swift. Returns True if handled."""
     if node.type == "enum_entry" and parent_class_nid:
         for child in node.children:
             if child.type == "simple_identifier":
@@ -415,6 +422,13 @@ def _swift_extra_walk(node, source: bytes, file_nid: str, stem: str, str_path: s
                 line = node.start_point[0] + 1
                 add_node_fn(case_nid, case_name, line)
                 add_edge_fn(parent_class_nid, case_nid, "case_of", line)
+        return True
+    if node.type == "property_declaration":
+        # Property initializers (`@State var x = Coordinator()`) and computed
+        # properties (SwiftUI `var body: some View { ... }`) hold most of a
+        # SwiftUI app's cross-file references. Queue the whole declaration for
+        # the call-graph pass, attributed to the enclosing type (or file).
+        function_bodies.append((parent_class_nid or file_nid, node))
         return True
     return False
 
@@ -683,6 +697,7 @@ def _extract_generic(path: Path, config: LanguageConfig) -> dict:
     seen_ids: set[str] = set()
     function_bodies: list[tuple[str, object]] = []
     pending_listen_edges: list[tuple[str, str, int]] = []
+    class_ranges: list[tuple[int, int, str]] = []
 
     def add_node(nid: str, label: str, line: int) -> None:
         if nid not in seen_ids:
@@ -735,6 +750,7 @@ def _extract_generic(path: Path, config: LanguageConfig) -> dict:
             line = node.start_point[0] + 1
             add_node(class_nid, class_name, line)
             add_edge(file_nid, class_nid, "contains", line)
+            class_ranges.append((node.start_byte, node.end_byte, class_nid))
 
             # Python-specific: inheritance
             if config.ts_module == "tree_sitter_python":
@@ -968,6 +984,62 @@ def _extract_generic(path: Path, config: LanguageConfig) -> dict:
             walk(child, parent_class_nid=None)
 
     walk(root)
+
+    # ── Type-reference pass (Swift) ───────────────────────────────────────────
+    # Type annotations (`var zone: AttentionZone`) and metatype references
+    # (`Person.self`) are how value types, enums and SwiftData models are used
+    # across files — none of them are call expressions, so the call-graph pass
+    # never sees them. Collect them as raw refs; extract() resolves the ones
+    # that name a node in another file into `references` INFERRED edges.
+    raw_type_refs: list[dict] = []
+    if config.ts_module == "tree_sitter_swift":
+        _TYPE_REF_SKIP = frozenset({"inheritance_specifier", "attribute", "import_declaration"})
+        seen_type_refs: set[tuple[str, str]] = set()
+
+        def _innermost_class(start_byte: int) -> str:
+            best_nid = file_nid
+            best_span = None
+            for s, e, nid in class_ranges:
+                if s <= start_byte < e and (best_span is None or e - s < best_span):
+                    best_span = e - s
+                    best_nid = nid
+            return best_nid
+
+        def _record_type_ref(name: str, ref_node) -> None:
+            if not name or not name[0].isupper():
+                return
+            referrer = _innermost_class(ref_node.start_byte)
+            key = (referrer, name.lower())
+            if key in seen_type_refs:
+                return
+            seen_type_refs.add(key)
+            raw_type_refs.append({
+                "referrer_nid": referrer,
+                "type_name": name,
+                "source_file": str_path,
+                "source_location": f"L{ref_node.start_point[0] + 1}",
+            })
+
+        def _walk_type_refs(node) -> None:
+            if node.type in _TYPE_REF_SKIP:
+                return
+            if node.type == "user_type":
+                idents = [c for c in node.children if c.type == "type_identifier"]
+                if idents:
+                    _record_type_ref(_read_text(idents[-1], source), node)
+                return
+            if node.type == "navigation_expression":
+                # `Person.self` — a metatype reference, not a call
+                kids = node.children
+                if (len(kids) == 2 and kids[0].type == "simple_identifier"
+                        and kids[1].type == "navigation_suffix"
+                        and _read_text(kids[1], source) == ".self"):
+                    _record_type_ref(_read_text(kids[0], source), node)
+                    return
+            for child in node.children:
+                _walk_type_refs(child)
+
+        _walk_type_refs(root)
 
     # ── Call-graph pass ───────────────────────────────────────────────────────
     label_to_nid: dict[str, str] = {}
@@ -1278,7 +1350,8 @@ def _extract_generic(path: Path, config: LanguageConfig) -> dict:
         if src in valid_ids and (tgt in valid_ids or edge["relation"] in ("imports", "imports_from")):
             clean_edges.append(edge)
 
-    return {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls}
+    return {"nodes": nodes, "edges": clean_edges, "raw_calls": raw_calls,
+            "raw_type_refs": raw_type_refs}
 
 
 # ── Python rationale extraction ───────────────────────────────────────────────
@@ -2287,11 +2360,19 @@ def extract(paths: list[Path], cache_root: Path | None = None) -> dict:
         if extractor is None:
             continue
         cached = load_cached(path, cache_root or root)
+        # AST cache entries (identified by their raw_calls key) are invalidated
+        # when the extractor itself changes; semantic (LLM) entries lack
+        # raw_calls and are never invalidated this way — re-extracting those
+        # would cost LLM tokens for identical content.
+        if (cached is not None and "raw_calls" in cached
+                and cached.get("extractor_version") != _AST_EXTRACTOR_VERSION):
+            cached = None
         if cached is not None:
             per_file.append(cached)
             continue
         result = extractor(path)
         if "error" not in result:
+            result["extractor_version"] = _AST_EXTRACTOR_VERSION
             save_cached(path, result, cache_root or root)
         per_file.append(result)
     if total >= _PROGRESS_INTERVAL:
@@ -2348,8 +2429,10 @@ def extract(paths: list[Path], cache_root: Path | None = None) -> dict:
     # Cross-file call resolution for all languages
     # Each extractor saved unresolved calls in raw_calls. Now that we have all
     # nodes from all files, resolve any callee that exists in another file.
+    # Nodes with a real source_file win label collisions against synthesized
+    # shadow nodes (empty source_file), so calls land on real definitions.
     global_label_to_nid: dict[str, str] = {}
-    for n in all_nodes:
+    for n in sorted(all_nodes, key=lambda n: bool(n.get("source_file"))):
         raw = n.get("label", "")
         normalised = raw.strip("()").lstrip(".")
         if normalised:
@@ -2375,6 +2458,40 @@ def extract(paths: list[Path], cache_root: Path | None = None) -> dict:
                     "source_location": rc.get("source_location"),
                     "weight": 1.0,
                 })
+
+    # Cross-file type-reference resolution (Swift): annotations and X.self
+    # metatype refs collected per file, resolved against real definitions.
+    # Generic stdlib names (String, Int, View, ...) are skipped — they would
+    # recreate exactly the god nodes the stoplist removes.
+    from paragraph.stoplist import is_stoplisted
+    for result in per_file:
+        for tr in result.get("raw_type_refs", []):
+            name = tr.get("type_name", "")
+            if not name or is_stoplisted(name):
+                continue
+            tgt = global_label_to_nid.get(name.lower())
+            referrer = tr["referrer_nid"]
+            if tgt and tgt != referrer and (referrer, tgt) not in existing_pairs:
+                existing_pairs.add((referrer, tgt))
+                all_edges.append({
+                    "source": referrer,
+                    "target": tgt,
+                    "relation": "references",
+                    "confidence": "INFERRED",
+                    "confidence_score": 0.7,
+                    "source_file": tr.get("source_file", ""),
+                    "source_location": tr.get("source_location"),
+                    "weight": 1.0,
+                })
+
+    # Merge shadow nodes into real definitions and drop generic stdlib
+    # symbols (Sendable, View, str, ...) that would otherwise become
+    # cross-community god nodes. See stoplist.py for the two classes.
+    from paragraph.stoplist import resolve_shadow_nodes
+    all_nodes, all_edges, shadow_stats = resolve_shadow_nodes(all_nodes, all_edges)
+    if shadow_stats["merged"] or shadow_stats["dropped"]:
+        print(f"  shadow nodes: {shadow_stats['merged']} merged into real definitions, "
+              f"{shadow_stats['dropped']} generic symbol(s) dropped")
 
     return {
         "nodes": all_nodes,

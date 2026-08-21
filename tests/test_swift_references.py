@@ -1,0 +1,140 @@
+"""Cross-file Swift reference extraction.
+
+SwiftUI apps hold most cross-file references in places the plain call-graph
+pass never looked: property initializers, computed-property bodies (`var
+body: some View`), type annotations, and `X.self` metatype references.
+These tests pin the extraction added for each of those sites.
+"""
+from pathlib import Path
+
+from paragraph.extract import extract
+
+DEFS = """
+import Foundation
+
+@Observable
+final class BrainDumpCoordinator {
+    func start() { print("go") }
+}
+
+enum AttentionZone { case home, away }
+
+@Model
+final class Person {
+    var name: String = ""
+}
+"""
+
+USES = """
+import SwiftUI
+
+struct ContentView: SomeProtocol {
+    @State var coordinator = BrainDumpCoordinator()
+    var zone: AttentionZone = .home
+    let schema = [Person.self]
+
+    var body: some CustomBody {
+        CustomBody().onAppear { coordinator.start() }
+    }
+
+    func helper() {
+        let c = BrainDumpCoordinator()
+        c.start()
+    }
+}
+"""
+
+
+def _extract_two(tmp_path) -> dict:
+    (tmp_path / "Defs.swift").write_text(DEFS)
+    (tmp_path / "Uses.swift").write_text(USES)
+    return extract([tmp_path / "Defs.swift", tmp_path / "Uses.swift"],
+                   cache_root=tmp_path)
+
+
+def _rel(result, relation):
+    return {(e["source"], e["target"]) for e in result["edges"]
+            if e["relation"] == relation}
+
+
+def test_property_initializer_call_resolved_cross_file(tmp_path):
+    result = _extract_two(tmp_path)
+    assert ("uses_contentview", "defs_braindumpcoordinator") in _rel(result, "calls")
+
+
+def test_computed_property_body_calls_resolved(tmp_path):
+    result = _extract_two(tmp_path)
+    # coordinator.start() lives inside `var body` — attributed to the type
+    assert ("uses_contentview", "defs_braindumpcoordinator_start") in _rel(result, "calls")
+
+
+def test_type_annotation_reference(tmp_path):
+    result = _extract_two(tmp_path)
+    assert ("uses_contentview", "defs_attentionzone") in _rel(result, "references")
+
+
+def test_metatype_self_reference(tmp_path):
+    result = _extract_two(tmp_path)
+    assert ("uses_contentview", "defs_person") in _rel(result, "references")
+
+
+def test_generic_conformance_not_synthesized(tmp_path):
+    (tmp_path / "One.swift").write_text(
+        "struct Thing: Sendable, Equatable { var x: Int }\n")
+    result = extract([tmp_path / "One.swift"], cache_root=tmp_path)
+    labels = {n["label"] for n in result["nodes"]}
+    assert "Sendable" not in labels
+    assert "Equatable" not in labels
+    # and no dangling inherits edges to them
+    assert not [e for e in result["edges"]
+                if e["relation"] == "inherits" and e["target"] in ("sendable", "equatable")]
+
+
+def test_stoplisted_types_not_referenced(tmp_path):
+    (tmp_path / "One.swift").write_text(
+        "struct Thing { var name: String = \"\"; var when: Date? }\n")
+    result = extract([tmp_path / "One.swift"], cache_root=tmp_path)
+    assert _rel(result, "references") == set()
+
+
+def test_cross_file_inherits_merges_into_real_definition(tmp_path):
+    (tmp_path / "Base.swift").write_text("class BaseService { }\n")
+    (tmp_path / "Child.swift").write_text("final class ChildService: BaseService { }\n")
+    result = extract([tmp_path / "Base.swift", tmp_path / "Child.swift"],
+                     cache_root=tmp_path)
+    # the shadow node is merged, the edge lands on the real definition
+    shadows = [n for n in result["nodes"] if not n.get("source_file")]
+    assert shadows == []
+    assert ("child_childservice", "base_baseservice") in _rel(result, "inherits")
+
+
+def test_stale_ast_cache_invalidated_by_version(tmp_path):
+    from paragraph.cache import save_cached, load_cached
+    f = tmp_path / "One.swift"
+    f.write_text("struct Thing { }\n")
+    # simulate a pre-versioning AST cache entry
+    save_cached(f, {"nodes": [{"id": "stale", "label": "Stale",
+                               "file_type": "code", "source_file": str(f),
+                               "source_location": "L1"}],
+                    "edges": [], "raw_calls": []}, tmp_path)
+    result = extract([f], cache_root=tmp_path)
+    labels = {n["label"] for n in result["nodes"]}
+    assert "Stale" not in labels
+    assert "Thing" in labels
+    # and the refreshed entry is version-stamped
+    cached = load_cached(f, tmp_path)
+    assert cached.get("extractor_version") is not None
+
+
+def test_semantic_cache_entries_untouched(tmp_path):
+    from paragraph.cache import save_cached
+    f = tmp_path / "One.swift"
+    f.write_text("struct Thing { }\n")
+    # semantic entries have no raw_calls key and must survive as-is
+    save_cached(f, {"nodes": [{"id": "sem", "label": "Semantic concept",
+                               "file_type": "rationale", "source_file": str(f),
+                               "source_location": "L1"}],
+                    "edges": []}, tmp_path)
+    result = extract([f], cache_root=tmp_path)
+    labels = {n["label"] for n in result["nodes"]}
+    assert "Semantic concept" in labels

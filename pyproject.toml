@@ -44,6 +44,7 @@ languages = [
     "tree-sitter-objc",
 ]
 mcp = ["mcp>=1.2,<2"]
+link = ["numpy"]
 neo4j = ["neo4j"]
 pdf = ["pypdf", "html2text"]
 watch = ["watchdog"]
@@ -52,7 +53,7 @@ office = ["python-docx", "openpyxl"]
 video = ["faster-whisper", "yt-dlp"]
 all = [
     "paragraph[languages]",
-    "mcp>=1.2,<2", "neo4j", "pypdf", "html2text", "watchdog",
+    "mcp>=1.2,<2", "numpy", "neo4j", "pypdf", "html2text", "watchdog",
     "graspologic; python_version < '3.13'",
     "python-docx", "openpyxl", "faster-whisper", "yt-dlp",
 ]
