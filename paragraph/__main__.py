@@ -1,5 +1,6 @@
 """paragraph CLI - `paragraph install` sets up the Claude Code skill."""
 from __future__ import annotations
+import argparse
 import json
 import re
 import shutil
@@ -278,672 +279,672 @@ def _clone_repo(url: str, branch: str | None = None, out_dir: Path | None = None
     return dest
 
 
+# ---------------------------------------------------------------------------
+# Command handlers (one per subcommand; imports stay lazy inside each handler)
+# ---------------------------------------------------------------------------
+
+def _cmd_install(ns: argparse.Namespace) -> None:
+    install()
+
+
+def _cmd_claude(ns: argparse.Namespace) -> None:
+    if ns.action == "install":
+        claude_install()
+    else:
+        claude_uninstall()
+
+
+def _cmd_hook(ns: argparse.Namespace) -> None:
+    from paragraph.hooks import install as hook_install, uninstall as hook_uninstall, status as hook_status
+    if ns.action == "install":
+        print(hook_install(Path(".")))
+    elif ns.action == "uninstall":
+        print(hook_uninstall(Path(".")))
+    else:
+        print(hook_status(Path(".")))
+
+
+def _cmd_query(ns: argparse.Namespace) -> None:
+    from paragraph.serve import _score_nodes, _bfs, _dfs, _subgraph_to_text
+    from paragraph.security import sanitize_label
+    from networkx.readwrite import json_graph
+    question = ns.question
+    use_dfs = ns.dfs
+    budget = ns.budget
+    graph_path = ns.graph
+    gp = Path(graph_path).resolve()
+    if not gp.exists():
+        print(f"error: graph file not found: {gp}", file=sys.stderr)
+        sys.exit(1)
+    if not gp.suffix == ".json":
+        print(f"error: graph file must be a .json file", file=sys.stderr)
+        sys.exit(1)
+    try:
+        import json as _json
+        import networkx as _nx
+        _raw = _json.loads(gp.read_text(encoding="utf-8"))
+        try:
+            G = json_graph.node_link_graph(_raw, edges="links")
+        except TypeError:
+            G = json_graph.node_link_graph(_raw)
+    except Exception as exc:
+        print(f"error: could not load graph: {exc}", file=sys.stderr)
+        sys.exit(1)
+    terms = [t.lower() for t in question.split() if len(t) > 2]
+    scored = _score_nodes(G, terms)
+    if not scored:
+        print("No matching nodes found.")
+        sys.exit(0)
+    start = [nid for _, nid in scored[:5]]
+    nodes, edges = (_dfs if use_dfs else _bfs)(G, start, depth=2)
+    print(_subgraph_to_text(G, nodes, edges, token_budget=budget))
+
+
+def _cmd_retrieve(ns: argparse.Namespace) -> None:
+    from paragraph.retrieve import main as _retrieve_main
+    sys.exit(_retrieve_main(list(ns.args)))
+
+
+def _cmd_save_result(ns: argparse.Namespace) -> None:
+    from paragraph.ingest import save_query_result as _sqr
+    out = _sqr(
+        question=ns.question,
+        answer=ns.answer,
+        memory_dir=Path(ns.memory_dir),
+        query_type=ns.query_type,
+        source_nodes=ns.nodes or None,
+    )
+    print(f"Saved to {out}")
+
+
+def _cmd_path(ns: argparse.Namespace) -> None:
+    from paragraph.serve import _score_nodes
+    from networkx.readwrite import json_graph
+    import networkx as _nx
+    source_label = ns.source
+    target_label = ns.target
+    graph_path = ns.graph
+    gp = Path(graph_path).resolve()
+    if not gp.exists():
+        print(f"error: graph file not found: {gp}", file=sys.stderr)
+        sys.exit(1)
+    _raw = json.loads(gp.read_text(encoding="utf-8"))
+    try:
+        G = json_graph.node_link_graph(_raw, edges="links")
+    except TypeError:
+        G = json_graph.node_link_graph(_raw)
+    src_scored = _score_nodes(G, [t.lower() for t in source_label.split()])
+    tgt_scored = _score_nodes(G, [t.lower() for t in target_label.split()])
+    if not src_scored:
+        print(f"No node matching '{source_label}' found.", file=sys.stderr)
+        sys.exit(1)
+    if not tgt_scored:
+        print(f"No node matching '{target_label}' found.", file=sys.stderr)
+        sys.exit(1)
+    src_nid, tgt_nid = src_scored[0][1], tgt_scored[0][1]
+    try:
+        path_nodes = _nx.shortest_path(G, src_nid, tgt_nid)
+    except (_nx.NetworkXNoPath, _nx.NodeNotFound):
+        print(f"No path found between '{source_label}' and '{target_label}'.")
+        sys.exit(0)
+    hops = len(path_nodes) - 1
+    segments = []
+    for i in range(len(path_nodes) - 1):
+        u, v = path_nodes[i], path_nodes[i + 1]
+        edata = G.edges[u, v]
+        rel = edata.get("relation", "")
+        conf = edata.get("confidence", "")
+        conf_str = f" [{conf}]" if conf else ""
+        if i == 0:
+            segments.append(G.nodes[u].get("label", u))
+        segments.append(f"--{rel}{conf_str}--> {G.nodes[v].get('label', v)}")
+    print(f"Shortest path ({hops} hops):\n  " + " ".join(segments))
+
+
+def _cmd_explain(ns: argparse.Namespace) -> None:
+    from paragraph.serve import _find_node
+    from networkx.readwrite import json_graph
+    label = ns.node
+    graph_path = ns.graph
+    gp = Path(graph_path).resolve()
+    if not gp.exists():
+        print(f"error: graph file not found: {gp}", file=sys.stderr)
+        sys.exit(1)
+    _raw = json.loads(gp.read_text(encoding="utf-8"))
+    try:
+        G = json_graph.node_link_graph(_raw, edges="links")
+    except TypeError:
+        G = json_graph.node_link_graph(_raw)
+    matches = _find_node(G, label)
+    if not matches:
+        print(f"No node matching '{label}' found.")
+        sys.exit(0)
+    nid = matches[0]
+    d = G.nodes[nid]
+    print(f"Node: {d.get('label', nid)}")
+    print(f"  ID:        {nid}")
+    print(f"  Source:    {d.get('source_file', '')} {d.get('source_location', '')}".rstrip())
+    print(f"  Type:      {d.get('file_type', '')}")
+    print(f"  Community: {d.get('community', '')}")
+    print(f"  Degree:    {G.degree(nid)}")
+    neighbors = list(G.neighbors(nid))
+    if neighbors:
+        print(f"\nConnections ({len(neighbors)}):")
+        for nb in sorted(neighbors, key=lambda n: G.degree(n), reverse=True)[:20]:
+            edata = G.edges[nid, nb]
+            rel = edata.get("relation", "")
+            conf = edata.get("confidence", "")
+            print(f"  --> {G.nodes[nb].get('label', nb)} [{rel}] [{conf}]")
+        if len(neighbors) > 20:
+            print(f"  ... and {len(neighbors) - 20} more")
+
+
+def _cmd_add(ns: argparse.Namespace) -> None:
+    from paragraph.ingest import ingest as _ingest
+    try:
+        saved = _ingest(ns.url, ns.dir, author=ns.author, contributor=ns.contributor)
+        print(f"Saved to {saved}")
+        print("Run /paragraph --update in your AI assistant to update the graph.")
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _cmd_watch(ns: argparse.Namespace) -> None:
+    watch_path = ns.path
+    if not watch_path.exists():
+        print(f"error: path not found: {watch_path}", file=sys.stderr)
+        sys.exit(1)
+    from paragraph.watch import watch as _watch
+    try:
+        _watch(watch_path)
+    except ImportError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _cmd_analyze(ns: argparse.Namespace) -> None:
+    watch_path = ns.path
+    graph_json = watch_path / "graphify-out" / "graph.json"
+    if not graph_json.exists():
+        print(f"error: no graph found at {graph_json} — run /paragraph first", file=sys.stderr)
+        sys.exit(1)
+    from networkx.readwrite import json_graph as _jg
+    from paragraph.cluster import score_all
+    from paragraph.insights import insights_markdown, load_history, record_history
+    data = json.loads(graph_json.read_text(encoding="utf-8"))
+    try:
+        G = _jg.node_link_graph(data, edges="links")
+    except TypeError:
+        G = _jg.node_link_graph(data)
+    communities: dict[int, list[str]] = {}
+    for node in data.get("nodes", []):
+        cid = node.get("community")
+        if cid is not None:
+            communities.setdefault(int(cid), []).append(node["id"])
+    if not communities:
+        print("error: graph.json has no community assignments — run cluster-only first", file=sys.stderr)
+        sys.exit(1)
+    labels = {
+        int(k): v
+        for k, v in (data.get("graph", {}).get("community_labels") or {}).items()
+        if str(k).lstrip("-").isdigit()
+    }
+    cohesion = score_all(G, communities)
+    out_dir = watch_path / "graphify-out"
+    record_history(out_dir, G, communities)
+    md = insights_markdown(G, communities, cohesion, labels or None,
+                           history=load_history(out_dir))
+    out_path = watch_path / "graphify-out" / "GRAPH_INSIGHTS.md"
+    out_path.write_text(md, encoding="utf-8")
+    print(md)
+    print(f"Written to {out_path}")
+
+
+def _cmd_advise(ns: argparse.Namespace) -> None:
+    from paragraph.advise import run as _run_advise
+    sys.exit(_run_advise(ns.path))
+
+
+def _cmd_connect_chunks(ns: argparse.Namespace) -> None:
+    watch_path = ns.path
+    graph_json = watch_path / "graphify-out" / "graph.json"
+    if not graph_json.exists():
+        print(f"error: no graph found at {graph_json} — run /paragraph first", file=sys.stderr)
+        sys.exit(1)
+    from paragraph.build import connect_orphan_chunks
+    data = json.loads(graph_json.read_text(encoding="utf-8"))
+    data, stats = connect_orphan_chunks(data)
+    if stats["linked"] == 0:
+        print("No orphaned document/rationale chunks found — nothing to connect.")
+        sys.exit(0)
+    graph_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    print(f"Linked {stats['linked']} orphaned chunk(s) across {stats['files']} file(s) "
+          f"({stats['file_nodes_created']} file node(s) created).")
+    print(f"Run `paragraph cluster-only {watch_path}` to re-cluster and refresh the report/viz.")
+
+
+def _cmd_prune_generic(ns: argparse.Namespace) -> None:
+    watch_path = ns.path
+    extra: set[str] = set()
+    for chunk in ns.also or []:
+        extra |= {s.strip().lower() for s in chunk.split(",") if s.strip()}
+    keep: set[str] = set()
+    for chunk in ns.keep or []:
+        keep |= {s.strip().lower() for s in chunk.split(",") if s.strip()}
+    dry_run = ns.dry_run
+    graph_json = watch_path / "graphify-out" / "graph.json"
+    if not graph_json.exists():
+        print(f"error: no graph found at {graph_json} — run /paragraph first", file=sys.stderr)
+        sys.exit(1)
+    from paragraph.stoplist import prune_generic
+    data = json.loads(graph_json.read_text(encoding="utf-8"))
+    n_before = len(data.get("nodes", []))
+    e_before = len(data.get("links", data.get("edges", [])))
+    data, stats = prune_generic(data, extra_stoplist=frozenset(extra), keep=frozenset(keep))
+    n_after = len(data.get("nodes", []))
+    e_after = len(data.get("links", data.get("edges", [])))
+    print(f"Shadow nodes merged into real definitions: {stats['merged']} "
+          f"({stats['edges_remapped']} edge(s) remapped)")
+    print(f"Generic symbols dropped: {stats['dropped']}")
+    print(f"Nodes: {n_before} -> {n_after} | Edges: {e_before} -> {e_after}")
+    if dry_run:
+        print("Dry run — graph.json not modified.")
+        sys.exit(0)
+    if stats["merged"] == 0 and stats["dropped"] == 0:
+        print("Nothing to prune.")
+        sys.exit(0)
+    graph_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    print(f"Run `paragraph cluster-only {watch_path}` to re-cluster and refresh the report/viz.")
+
+
+def _cmd_link(ns: argparse.Namespace) -> None:
+    types = tuple(s.strip() for s in ns.types.split(",") if s.strip())
+    from paragraph.link import run as _run_link
+    sys.exit(_run_link(ns.path, threshold=ns.threshold, top_k=ns.top_k,
+                       source_types=types, dry_run=ns.dry_run))
+
+
+def _cmd_serve(ns: argparse.Namespace) -> None:
+    graph_path = Path(ns.target)
+    if graph_path.is_dir():
+        graph_path = graph_path / "graphify-out" / "graph.json"
+    from paragraph.serve import serve as _serve
+    _serve(str(graph_path))
+
+
+def _cmd_enrich(ns: argparse.Namespace) -> None:
+    from paragraph.enrich import run as _run_enrich
+    sys.exit(_run_enrich(ns.path, bodies_only=ns.bodies_only, embed_only=ns.embed_only,
+                         stats_only=ns.stats, full=ns.full, model=ns.model))
+
+
+def _cmd_cluster_only(ns: argparse.Namespace) -> None:
+    watch_path = ns.path
+    graph_json = watch_path / "graphify-out" / "graph.json"
+    if not graph_json.exists():
+        print(f"error: no graph found at {graph_json} — run /paragraph first", file=sys.stderr)
+        sys.exit(1)
+    from networkx.readwrite import json_graph as _jg
+    from paragraph.build import build_from_json
+    from paragraph.cluster import cluster, score_all
+    from paragraph.analyze import god_nodes, surprising_connections, suggest_questions
+    from paragraph.report import (generate, freshness_report, root_label,
+                                  stable_mode_default, FRESHNESS_FILENAME)
+    from paragraph.export import to_json, to_html_auto
+    print("Loading existing graph...")
+    _raw = json.loads(graph_json.read_text(encoding="utf-8"))
+    G = build_from_json(_raw)
+    print(f"Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+    print("Re-clustering...")
+    communities = cluster(G)
+    cohesion = score_all(G, communities)
+    gods = god_nodes(G)
+    surprises = surprising_connections(G, communities)
+    from paragraph.cluster import carry_over_labels
+    old_labels = {
+        int(k): v
+        for k, v in (_raw.get("graph", {}).get("community_labels") or {}).items()
+        if str(k).lstrip("-").isdigit()
+    }
+    old_node_communities = {
+        n["id"]: n["community"] for n in _raw.get("nodes", [])
+        if n.get("community") is not None
+    }
+    labels = carry_over_labels(G, communities, old_node_communities, old_labels)
+    questions = suggest_questions(G, communities, labels)
+    tokens = {"input": 0, "output": 0}
+    report = generate(G, communities, cohesion, labels, gods, surprises,
+                      {"warning": "cluster-only mode — file stats not available"},
+                      tokens, root_label(watch_path), suggested_questions=questions)
+    out = watch_path / "graphify-out"
+    (out / "GRAPH_REPORT.md").write_text(report, encoding="utf-8")
+    if stable_mode_default(out, str(watch_path)):
+        (out / FRESHNESS_FILENAME).write_text(
+            freshness_report(
+                {"warning": "cluster-only mode — file stats not available"},
+                root_label(watch_path), out_dir=out),
+            encoding="utf-8")
+    to_json(G, communities, str(out / "graph.json"), community_labels=labels)
+    from paragraph.insights import record_history
+    record_history(out, G, communities)
+    viz = to_html_auto(G, communities, str(out / "graph.html"), community_labels=labels or None)
+    if viz == "aggregated":
+        print("Graph too large for full viz — graph.html shows the aggregated community view.")
+    html_part = " graph.json and graph.html" if viz != "skipped" else " and graph.json"
+    print(f"Done — {len(communities)} communities. GRAPH_REPORT.md,{html_part} updated.")
+
+
+def _cmd_update(ns: argparse.Namespace) -> None:
+    watch_path = ns.path
+    if not watch_path.exists():
+        print(f"error: path not found: {watch_path}", file=sys.stderr)
+        sys.exit(1)
+    from paragraph.watch import _rebuild_code
+    print(f"Re-extracting code files in {watch_path} (no LLM needed)...")
+    ok = _rebuild_code(watch_path)
+    if ok:
+        print("Code graph updated. For doc/paper/image changes run /paragraph --update in your AI assistant.")
+    else:
+        print("Nothing to update or rebuild failed — check output above.", file=sys.stderr)
+        sys.exit(1)
+
+
+def _cmd_ingest_claude_mem(ns: argparse.Namespace) -> None:
+    project_path = ns.path
+    if not project_path.exists():
+        print(f"error: path not found: {project_path}", file=sys.stderr)
+        sys.exit(1)
+    from paragraph.ingest_claudemem import run as _run_claudemem
+    sys.exit(_run_claudemem(project_path, db_path=ns.db, graph_path=ns.graph,
+                            project=ns.project, config_path=ns.config))
+
+
+def _cmd_check_update(ns: argparse.Namespace) -> None:
+    from paragraph.watch import check_update
+    check_update(ns.path.resolve())
+    sys.exit(0)
+
+
+def _cmd_merge_graphs(ns: argparse.Namespace) -> None:
+    graph_paths = [Path(g) for g in ns.graphs]
+    out_path = ns.out
+    if len(graph_paths) < 2:
+        print("Usage: paragraph merge-graphs <graph1.json> <graph2.json> [...] [--out merged.json]", file=sys.stderr)
+        sys.exit(1)
+    import networkx as _nx
+    from networkx.readwrite import json_graph as _jg
+    graphs = []
+    for gp in graph_paths:
+        if not gp.exists():
+            print(f"error: not found: {gp}", file=sys.stderr)
+            sys.exit(1)
+        data = json.loads(gp.read_text(encoding="utf-8"))
+        try:
+            G = _jg.node_link_graph(data, edges="links")
+        except TypeError:
+            G = _jg.node_link_graph(data)
+        # Tag every node with which repo it came from
+        repo_tag = gp.parent.parent.name  # graphify-out/../ → repo dir name
+        for node in G.nodes:
+            G.nodes[node].setdefault("repo", repo_tag)
+        graphs.append(G)
+    merged = _nx.compose_all(graphs)
+    try:
+        out_data = _jg.node_link_data(merged, edges="links")
+    except TypeError:
+        out_data = _jg.node_link_data(merged)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(out_data, indent=2), encoding="utf-8")
+    print(f"Merged {len(graphs)} graphs → {merged.number_of_nodes()} nodes, {merged.number_of_edges()} edges")
+    print(f"Written to: {out_path}")
+
+
+def _cmd_clone(ns: argparse.Namespace) -> None:
+    local_path = _clone_repo(ns.url, branch=ns.branch, out_dir=ns.out)
+    print(local_path)
+
+
+def _cmd_benchmark(ns: argparse.Namespace) -> None:
+    from paragraph.benchmark import run_benchmark, print_benchmark
+    graph_path = ns.graph
+    # Try to load corpus_words from detect output
+    corpus_words = None
+    detect_path = Path(".graphify_detect.json")
+    if detect_path.exists():
+        try:
+            detect_data = json.loads(detect_path.read_text(encoding="utf-8"))
+            corpus_words = detect_data.get("total_words")
+        except Exception:
+            pass
+    result = run_benchmark(graph_path, corpus_words=corpus_words)
+    print_benchmark(result)
+
+
+# ---------------------------------------------------------------------------
+# Parser
+# ---------------------------------------------------------------------------
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="paragraph", description="paragraph CLI")
+    sub = parser.add_subparsers(dest="command", metavar="<command>", required=True)
+
+    p = sub.add_parser("install",
+                       help="copy skill to ~/.claude/skills/paragraph/ and register in CLAUDE.md")
+    p.set_defaults(func=_cmd_install)
+
+    p = sub.add_parser("claude",
+                       help="install: write paragraph section to CLAUDE.md + PreToolUse hook; uninstall: remove them")
+    p.add_argument("action", choices=("install", "uninstall"))
+    p.set_defaults(func=_cmd_claude)
+
+    p = sub.add_parser("hook",
+                       help="install/uninstall/status for post-commit/post-checkout git hooks")
+    p.add_argument("action", choices=("install", "uninstall", "status"))
+    p.set_defaults(func=_cmd_hook)
+
+    p = sub.add_parser("path",
+                       help="shortest path between two nodes in graph.json")
+    p.add_argument("source", metavar='"A"')
+    p.add_argument("target", metavar='"B"')
+    p.add_argument("--graph", default="graphify-out/graph.json",
+                   help="path to graph.json (default graphify-out/graph.json)")
+    p.set_defaults(func=_cmd_path)
+
+    p = sub.add_parser("explain",
+                       help="plain-language explanation of a node and its neighbors")
+    p.add_argument("node", metavar='"X"')
+    p.add_argument("--graph", default="graphify-out/graph.json",
+                   help="path to graph.json (default graphify-out/graph.json)")
+    p.set_defaults(func=_cmd_explain)
+
+    p = sub.add_parser("clone",
+                       help="clone a GitHub repo locally and print its path for /paragraph")
+    p.add_argument("url", metavar="<github-url>")
+    p.add_argument("--branch", default=None,
+                   help="checkout a specific branch (default: repo default)")
+    p.add_argument("--out", type=Path, default=None,
+                   help="clone to a custom directory (default: ~/.paragraph/repos/<owner>/<repo>)")
+    p.set_defaults(func=_cmd_clone)
+
+    p = sub.add_parser("merge-graphs",
+                       help="merge two or more graph.json files into one cross-repo graph")
+    p.add_argument("graphs", nargs="*", metavar="graph.json")
+    p.add_argument("--out", type=Path, default=Path("graphify-out/merged-graph.json"),
+                   help="output path (default: graphify-out/merged-graph.json)")
+    p.set_defaults(func=_cmd_merge_graphs)
+
+    p = sub.add_parser("add",
+                       help="fetch a URL and save it to ./raw, then update the graph")
+    p.add_argument("url", metavar="<url>")
+    p.add_argument("--author", default=None, metavar='"Name"',
+                   help="tag the author of the content")
+    p.add_argument("--contributor", default=None, metavar='"Name"',
+                   help="tag who added it to the corpus")
+    p.add_argument("--dir", type=Path, default=Path("raw"),
+                   help="target directory (default: ./raw)")
+    p.set_defaults(func=_cmd_add)
+
+    p = sub.add_parser("watch",
+                       help="watch a folder and rebuild the graph on code changes")
+    p.add_argument("path", nargs="?", type=Path, default=Path("."))
+    p.set_defaults(func=_cmd_watch)
+
+    p = sub.add_parser("update",
+                       help="re-extract code files and update the graph (no LLM needed)")
+    p.add_argument("path", nargs="?", type=Path, default=Path("."))
+    p.set_defaults(func=_cmd_update)
+
+    p = sub.add_parser("ingest-claude-mem",
+                       help="inject claude-mem observations into the graph (idempotent)")
+    p.add_argument("path", type=Path, metavar="<path>")
+    p.add_argument("--db", type=Path, default=None,
+                   help="claude-mem SQLite DB (default ~/.claude-mem/claude-mem.db)")
+    p.add_argument("--graph", type=Path, default=None,
+                   help="path to graph.json (default <path>/graphify-out/graph.json)")
+    p.add_argument("--project", default=None,
+                   help="claude-mem project name (default: basename of <path>)")
+    p.add_argument("--config", type=Path, default=None,
+                   help="filtering vocabulary JSON (default: graphify-out/ingest-config.json "
+                        "or ~/.paragraph/ingest-config.json; see docs/examples/paranote-ingest.json)")
+    p.set_defaults(func=_cmd_ingest_claude_mem)
+
+    p = sub.add_parser("cluster-only",
+                       help="rerun clustering on an existing graph.json and regenerate report")
+    p.add_argument("path", nargs="?", type=Path, default=Path("."))
+    p.set_defaults(func=_cmd_cluster_only)
+
+    p = sub.add_parser("connect-chunks",
+                       help="link orphaned doc/rationale chunks to per-file parent nodes")
+    p.add_argument("path", nargs="?", type=Path, default=Path("."))
+    p.set_defaults(func=_cmd_connect_chunks)
+
+    p = sub.add_parser("prune-generic",
+                       help="merge shadow nodes into real definitions and drop generic "
+                            "stdlib/framework symbols (Sendable, View, str, ...) from graph.json")
+    p.add_argument("path", nargs="?", type=Path, default=Path("."))
+    p.add_argument("--also", action="append", metavar="a,b,c",
+                   help="additional labels to treat as generic (case-insensitive)")
+    p.add_argument("--keep", action="append", metavar="a,b,c",
+                   help="labels to exempt from the built-in stoplist")
+    p.add_argument("--dry-run", action="store_true",
+                   help="report what would change without writing")
+    p.set_defaults(func=_cmd_prune_generic)
+
+    p = sub.add_parser("link",
+                       help="embedding-based doc<->code bridging: add conceptually_related_to "
+                            "edges from document/rationale nodes to their most-similar code nodes")
+    p.add_argument("path", nargs="?", type=Path, default=Path("."))
+    p.add_argument("--threshold", type=float, default=0.78, metavar="X",
+                   help="minimum cosine similarity (default 0.78)")
+    p.add_argument("--top-k", type=int, default=3, metavar="N",
+                   help="max code links per source node (default 3)")
+    p.add_argument("--types", default="document,rationale", metavar="a,b",
+                   help="source file_types to link (default document,rationale)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="report what would be linked without writing")
+    p.set_defaults(func=_cmd_link)
+
+    p = sub.add_parser("analyze",
+                       help="architectural analysis: community summaries, hubs/bridges/orphans, "
+                            "cross-community dependency cycles -> graphify-out/GRAPH_INSIGHTS.md")
+    p.add_argument("path", nargs="?", type=Path, default=Path("."))
+    p.set_defaults(func=_cmd_analyze)
+
+    p = sub.add_parser("advise",
+                       help="Swift coding-standards advice from the graph -> graphify-out/ADVICE.md "
+                            "(Swift nodes only — Python/other tooling code is excluded)")
+    p.add_argument("path", nargs="?", type=Path, default=Path("."))
+    p.set_defaults(func=_cmd_advise)
+
+    p = sub.add_parser("serve",
+                       help="start the MCP stdio server (query_graph, retrieve, insights, ...)")
+    p.add_argument("target", nargs="?", default="graphify-out/graph.json",
+                   metavar="path|graph.json")
+    p.set_defaults(func=_cmd_serve)
+
+    p = sub.add_parser("enrich",
+                       help="add source bodies + timestamps to graph.json and build vectors.db")
+    p.add_argument("path", nargs="?", type=Path, default=Path("."))
+    p.add_argument("--bodies-only", action="store_true",
+                   help="skip the embedding step (no ollama needed)")
+    p.add_argument("--embed-only", action="store_true",
+                   help="skip bodies/timestamps, just (re)embed")
+    p.add_argument("--stats", action="store_true",
+                   help="report current enrichment state")
+    p.add_argument("--full", action="store_true",
+                   help="re-embed everything (default skips unchanged nodes)")
+    p.add_argument("--model", default="nomic-embed-text", metavar="<name>",
+                   help="embedding model (default nomic-embed-text)")
+    p.set_defaults(func=_cmd_enrich)
+
+    p = sub.add_parser("query",
+                       help="BFS traversal of graph.json for a question")
+    p.add_argument("question", metavar='"<question>"')
+    p.add_argument("--dfs", action="store_true",
+                   help="use depth-first instead of breadth-first")
+    p.add_argument("--budget", type=int, default=2000, metavar="N",
+                   help="cap output at N tokens (default 2000)")
+    p.add_argument("--graph", default="graphify-out/graph.json",
+                   help="path to graph.json (default graphify-out/graph.json)")
+    p.set_defaults(func=_cmd_query)
+
+    # retrieve delegates to paragraph.retrieve's own parser — all args pass
+    # through untouched (main() short-circuits before parsing; the REMAINDER
+    # positional keeps passthrough working if this subparser is ever hit).
+    p = sub.add_parser("retrieve", add_help=False,
+                       help="diversity-aware embedding retrieval (the evaluated read path)")
+    p.add_argument("args", nargs=argparse.REMAINDER)
+    p.set_defaults(func=_cmd_retrieve)
+
+    p = sub.add_parser("save-result",
+                       help="save a Q&A result to graphify-out/memory/ for graph feedback loop")
+    p.add_argument("--question", required=True, metavar="Q",
+                   help="the question asked")
+    p.add_argument("--answer", required=True, metavar="A",
+                   help="the answer to save")
+    p.add_argument("--type", dest="query_type", default="query", metavar="T",
+                   help="query type: query|path_query|explain (default: query)")
+    p.add_argument("--nodes", nargs="*", default=[], metavar="N",
+                   help="source node labels cited in the answer")
+    p.add_argument("--memory-dir", default="graphify-out/memory", metavar="DIR",
+                   help="memory directory (default: graphify-out/memory)")
+    p.set_defaults(func=_cmd_save_result)
+
+    p = sub.add_parser("check-update",
+                       help="check needs_update flag and notify if semantic re-extraction is pending (cron-safe)")
+    p.add_argument("path", type=Path, metavar="<path>")
+    p.set_defaults(func=_cmd_check_update)
+
+    p = sub.add_parser("benchmark",
+                       help="measure token reduction vs naive full-corpus approach")
+    p.add_argument("graph", nargs="?", default="graphify-out/graph.json",
+                   metavar="graph.json")
+    p.set_defaults(func=_cmd_benchmark)
+
+    return parser
+
+
 def main() -> None:
     # Check the Claude skill install location for a stale version stamp.
     # Skip during install/uninstall (hook writes trigger a fresh check anyway).
     if not any(arg in ("install", "uninstall") for arg in sys.argv):
         _check_skill_version(Path.home() / _PLATFORM_CONFIG["claude"]["skill_dst"])
 
-    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
-        print("Usage: paragraph <command>")
-        print()
-        print("Commands:")
-        print("  install                 copy skill to ~/.claude/skills/paragraph/ and register in CLAUDE.md")
-        print("  claude install          write paragraph section to CLAUDE.md + PreToolUse hook")
-        print("  claude uninstall        remove paragraph section from CLAUDE.md + PreToolUse hook")
-        print("  path \"A\" \"B\"            shortest path between two nodes in graph.json")
-        print("    --graph <path>          path to graph.json (default graphify-out/graph.json)")
-        print("  explain \"X\"             plain-language explanation of a node and its neighbors")
-        print("    --graph <path>          path to graph.json (default graphify-out/graph.json)")
-        print("  clone <github-url>      clone a GitHub repo locally and print its path for /paragraph")
-        print("    --branch <branch>       checkout a specific branch (default: repo default)")
-        print("    --out <dir>             clone to a custom directory (default: ~/.paragraph/repos/<owner>/<repo>)")
-        print("  merge-graphs <g1> <g2>  merge two or more graph.json files into one cross-repo graph")
-        print("    --out <path>            output path (default: graphify-out/merged-graph.json)")
-        print("  add <url>               fetch a URL and save it to ./raw, then update the graph")
-        print("    --author \"Name\"         tag the author of the content")
-        print("    --contributor \"Name\"    tag who added it to the corpus")
-        print("    --dir <path>            target directory (default: ./raw)")
-        print("  watch <path>            watch a folder and rebuild the graph on code changes")
-        print("  update <path>           re-extract code files and update the graph (no LLM needed)")
-        print("  ingest-claude-mem <path> inject claude-mem observations into the graph (idempotent)")
-        print("    --db <path>             claude-mem SQLite DB (default ~/.claude-mem/claude-mem.db)")
-        print("    --graph <path>          path to graph.json (default <path>/graphify-out/graph.json)")
-        print("    --project <name>        claude-mem project name (default: basename of <path>)")
-        print("    --config <path>         filtering vocabulary JSON (default: graphify-out/ingest-config.json")
-        print("                            or ~/.paragraph/ingest-config.json; see docs/examples/paranote-ingest.json)")
-        print("  cluster-only <path>     rerun clustering on an existing graph.json and regenerate report")
-        print("  connect-chunks [path]   link orphaned doc/rationale chunks to per-file parent nodes")
-        print("  prune-generic [path]    merge shadow nodes into real definitions and drop generic")
-        print("                          stdlib/framework symbols (Sendable, View, str, ...) from graph.json")
-        print("    --also a,b,c            additional labels to treat as generic (case-insensitive)")
-        print("    --keep a,b,c            labels to exempt from the built-in stoplist")
-        print("    --dry-run               report what would change without writing")
-        print("  link [path]             embedding-based doc<->code bridging: add conceptually_related_to")
-        print("                          edges from document/rationale nodes to their most-similar code nodes")
-        print("    --threshold X           minimum cosine similarity (default 0.78)")
-        print("    --top-k N               max code links per source node (default 3)")
-        print("    --types a,b             source file_types to link (default document,rationale)")
-        print("    --dry-run               report what would be linked without writing")
-        print("  analyze [path]          architectural analysis: community summaries, hubs/bridges/orphans,")
-        print("                          cross-community dependency cycles -> graphify-out/GRAPH_INSIGHTS.md")
-        print("  advise [path]           Swift coding-standards advice from the graph -> graphify-out/ADVICE.md")
-        print("                          (Swift nodes only — Python/other tooling code is excluded)")
-        print("  serve [path|graph.json] start the MCP stdio server (query_graph, retrieve, insights, ...)")
-        print("  enrich [path]           add source bodies + timestamps to graph.json and build vectors.db")
-        print("    --bodies-only           skip the embedding step (no ollama needed)")
-        print("    --embed-only            skip bodies/timestamps, just (re)embed")
-        print("    --stats                 report current enrichment state")
-        print("    --full                  re-embed everything (default skips unchanged nodes)")
-        print("    --model <name>          embedding model (default nomic-embed-text)")
-        print("  query \"<question>\"       BFS traversal of graph.json for a question")
-        print("    --dfs                   use depth-first instead of breadth-first")
-        print("    --budget N              cap output at N tokens (default 2000)")
-        print("    --graph <path>          path to graph.json (default graphify-out/graph.json)")
-        print("  retrieve \"<question>\"    diversity-aware embedding retrieval (the evaluated read path)")
-        print("    --top-k N               ranked results to keep (default 10)")
-        print("    --budget N              token budget for packed chunks (default 8000)")
-        print("    --json                  output JSON with chunks + provenance")
-        print("    --graph <path>          path to graph.json (default graphify-out/graph.json)")
-        print("    --vectors <path>        path to vectors.db (default: next to graph.json)")
-        print("    --eval <eval.json>      run the labeled retrieval eval instead of a single query")
-        print("  save-result             save a Q&A result to graphify-out/memory/ for graph feedback loop")
-        print("    --question Q            the question asked")
-        print("    --answer A              the answer to save")
-        print("    --type T                query type: query|path_query|explain (default: query)")
-        print("    --nodes N1 N2 ...       source node labels cited in the answer")
-        print("    --memory-dir DIR        memory directory (default: graphify-out/memory)")
-        print("  check-update <path>     check needs_update flag and notify if semantic re-extraction is pending (cron-safe)")
-        print("  benchmark [graph.json]  measure token reduction vs naive full-corpus approach")
-        print("  hook install            install post-commit/post-checkout git hooks")
-        print("  hook uninstall          remove git hooks")
-        print("  hook status             check if git hooks are installed")
-        print()
-        return
+    argv = sys.argv[1:]
 
-    cmd = sys.argv[1]
-    if cmd == "install":
-        install()
-    elif cmd == "claude":
-        subcmd = sys.argv[2] if len(sys.argv) > 2 else ""
-        if subcmd == "install":
-            claude_install()
-        elif subcmd == "uninstall":
-            claude_uninstall()
-        else:
-            print("Usage: paragraph claude [install|uninstall]", file=sys.stderr)
-            sys.exit(1)
-    elif cmd == "hook":
-        from paragraph.hooks import install as hook_install, uninstall as hook_uninstall, status as hook_status
-        subcmd = sys.argv[2] if len(sys.argv) > 2 else ""
-        if subcmd == "install":
-            print(hook_install(Path(".")))
-        elif subcmd == "uninstall":
-            print(hook_uninstall(Path(".")))
-        elif subcmd == "status":
-            print(hook_status(Path(".")))
-        else:
-            print("Usage: paragraph hook [install|uninstall|status]", file=sys.stderr)
-            sys.exit(1)
-    elif cmd == "query":
-        if len(sys.argv) < 3:
-            print("Usage: paragraph query \"<question>\" [--dfs] [--budget N] [--graph path]", file=sys.stderr)
-            sys.exit(1)
-        from paragraph.serve import _score_nodes, _bfs, _dfs, _subgraph_to_text
-        from paragraph.security import sanitize_label
-        from networkx.readwrite import json_graph
-        question = sys.argv[2]
-        use_dfs = "--dfs" in sys.argv
-        budget = 2000
-        graph_path = "graphify-out/graph.json"
-        args = sys.argv[3:]
-        i = 0
-        while i < len(args):
-            if args[i] == "--budget" and i + 1 < len(args):
-                try:
-                    budget = int(args[i + 1])
-                except ValueError:
-                    print(f"error: --budget must be an integer", file=sys.stderr)
-                    sys.exit(1)
-                i += 2
-            elif args[i].startswith("--budget="):
-                try:
-                    budget = int(args[i].split("=", 1)[1])
-                except ValueError:
-                    print(f"error: --budget must be an integer", file=sys.stderr)
-                    sys.exit(1)
-                i += 1
-            elif args[i] == "--graph" and i + 1 < len(args):
-                graph_path = args[i + 1]; i += 2
-            else:
-                i += 1
-        gp = Path(graph_path).resolve()
-        if not gp.exists():
-            print(f"error: graph file not found: {gp}", file=sys.stderr)
-            sys.exit(1)
-        if not gp.suffix == ".json":
-            print(f"error: graph file must be a .json file", file=sys.stderr)
-            sys.exit(1)
-        try:
-            import json as _json
-            import networkx as _nx
-            _raw = _json.loads(gp.read_text(encoding="utf-8"))
-            try:
-                G = json_graph.node_link_graph(_raw, edges="links")
-            except TypeError:
-                G = json_graph.node_link_graph(_raw)
-        except Exception as exc:
-            print(f"error: could not load graph: {exc}", file=sys.stderr)
-            sys.exit(1)
-        terms = [t.lower() for t in question.split() if len(t) > 2]
-        scored = _score_nodes(G, terms)
-        if not scored:
-            print("No matching nodes found.")
-            sys.exit(0)
-        start = [nid for _, nid in scored[:5]]
-        nodes, edges = (_dfs if use_dfs else _bfs)(G, start, depth=2)
-        print(_subgraph_to_text(G, nodes, edges, token_budget=budget))
-    elif cmd == "retrieve":
+    # retrieve owns its full flag surface in paragraph.retrieve — hand
+    # everything after the command name straight through, untouched.
+    if argv and argv[0] == "retrieve":
         from paragraph.retrieve import main as _retrieve_main
-        sys.exit(_retrieve_main(sys.argv[2:]))
-    elif cmd == "save-result":
-        # paragraph save-result --question Q --answer A --type T [--nodes N1 N2 ...]
-        import argparse as _ap
-        p = _ap.ArgumentParser(prog="paragraph save-result")
-        p.add_argument("--question", required=True)
-        p.add_argument("--answer", required=True)
-        p.add_argument("--type", dest="query_type", default="query")
-        p.add_argument("--nodes", nargs="*", default=[])
-        p.add_argument("--memory-dir", default="graphify-out/memory")
-        opts = p.parse_args(sys.argv[2:])
-        from paragraph.ingest import save_query_result as _sqr
-        out = _sqr(
-            question=opts.question,
-            answer=opts.answer,
-            memory_dir=Path(opts.memory_dir),
-            query_type=opts.query_type,
-            source_nodes=opts.nodes or None,
-        )
-        print(f"Saved to {out}")
-    elif cmd == "path":
-        if len(sys.argv) < 4:
-            print("Usage: paragraph path \"<source>\" \"<target>\" [--graph path]", file=sys.stderr)
-            sys.exit(1)
-        from paragraph.serve import _score_nodes
-        from networkx.readwrite import json_graph
-        import networkx as _nx
-        source_label = sys.argv[2]
-        target_label = sys.argv[3]
-        graph_path = "graphify-out/graph.json"
-        args = sys.argv[4:]
-        for i, a in enumerate(args):
-            if a == "--graph" and i + 1 < len(args):
-                graph_path = args[i + 1]
-        gp = Path(graph_path).resolve()
-        if not gp.exists():
-            print(f"error: graph file not found: {gp}", file=sys.stderr)
-            sys.exit(1)
-        _raw = json.loads(gp.read_text(encoding="utf-8"))
-        try:
-            G = json_graph.node_link_graph(_raw, edges="links")
-        except TypeError:
-            G = json_graph.node_link_graph(_raw)
-        src_scored = _score_nodes(G, [t.lower() for t in source_label.split()])
-        tgt_scored = _score_nodes(G, [t.lower() for t in target_label.split()])
-        if not src_scored:
-            print(f"No node matching '{source_label}' found.", file=sys.stderr)
-            sys.exit(1)
-        if not tgt_scored:
-            print(f"No node matching '{target_label}' found.", file=sys.stderr)
-            sys.exit(1)
-        src_nid, tgt_nid = src_scored[0][1], tgt_scored[0][1]
-        try:
-            path_nodes = _nx.shortest_path(G, src_nid, tgt_nid)
-        except (_nx.NetworkXNoPath, _nx.NodeNotFound):
-            print(f"No path found between '{source_label}' and '{target_label}'.")
-            sys.exit(0)
-        hops = len(path_nodes) - 1
-        segments = []
-        for i in range(len(path_nodes) - 1):
-            u, v = path_nodes[i], path_nodes[i + 1]
-            edata = G.edges[u, v]
-            rel = edata.get("relation", "")
-            conf = edata.get("confidence", "")
-            conf_str = f" [{conf}]" if conf else ""
-            if i == 0:
-                segments.append(G.nodes[u].get("label", u))
-            segments.append(f"--{rel}{conf_str}--> {G.nodes[v].get('label', v)}")
-        print(f"Shortest path ({hops} hops):\n  " + " ".join(segments))
+        sys.exit(_retrieve_main(argv[1:]))
 
-    elif cmd == "explain":
-        if len(sys.argv) < 3:
-            print("Usage: paragraph explain \"<node>\" [--graph path]", file=sys.stderr)
-            sys.exit(1)
-        from paragraph.serve import _find_node
-        from networkx.readwrite import json_graph
-        label = sys.argv[2]
-        graph_path = "graphify-out/graph.json"
-        args = sys.argv[3:]
-        for i, a in enumerate(args):
-            if a == "--graph" and i + 1 < len(args):
-                graph_path = args[i + 1]
-        gp = Path(graph_path).resolve()
-        if not gp.exists():
-            print(f"error: graph file not found: {gp}", file=sys.stderr)
-            sys.exit(1)
-        _raw = json.loads(gp.read_text(encoding="utf-8"))
-        try:
-            G = json_graph.node_link_graph(_raw, edges="links")
-        except TypeError:
-            G = json_graph.node_link_graph(_raw)
-        matches = _find_node(G, label)
-        if not matches:
-            print(f"No node matching '{label}' found.")
-            sys.exit(0)
-        nid = matches[0]
-        d = G.nodes[nid]
-        print(f"Node: {d.get('label', nid)}")
-        print(f"  ID:        {nid}")
-        print(f"  Source:    {d.get('source_file', '')} {d.get('source_location', '')}".rstrip())
-        print(f"  Type:      {d.get('file_type', '')}")
-        print(f"  Community: {d.get('community', '')}")
-        print(f"  Degree:    {G.degree(nid)}")
-        neighbors = list(G.neighbors(nid))
-        if neighbors:
-            print(f"\nConnections ({len(neighbors)}):")
-            for nb in sorted(neighbors, key=lambda n: G.degree(n), reverse=True)[:20]:
-                edata = G.edges[nid, nb]
-                rel = edata.get("relation", "")
-                conf = edata.get("confidence", "")
-                print(f"  --> {G.nodes[nb].get('label', nb)} [{rel}] [{conf}]")
-            if len(neighbors) > 20:
-                print(f"  ... and {len(neighbors) - 20} more")
-
-    elif cmd == "add":
-        if len(sys.argv) < 3:
-            print("Usage: paragraph add <url> [--author Name] [--contributor Name] [--dir ./raw]", file=sys.stderr)
-            sys.exit(1)
-        from paragraph.ingest import ingest as _ingest
-        url = sys.argv[2]
-        author: str | None = None
-        contributor: str | None = None
-        target_dir = Path("raw")
-        args = sys.argv[3:]
-        i = 0
-        while i < len(args):
-            if args[i] == "--author" and i + 1 < len(args):
-                author = args[i + 1]; i += 2
-            elif args[i] == "--contributor" and i + 1 < len(args):
-                contributor = args[i + 1]; i += 2
-            elif args[i] == "--dir" and i + 1 < len(args):
-                target_dir = Path(args[i + 1]); i += 2
-            else:
-                i += 1
-        try:
-            saved = _ingest(url, target_dir, author=author, contributor=contributor)
-            print(f"Saved to {saved}")
-            print("Run /paragraph --update in your AI assistant to update the graph.")
-        except Exception as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-    elif cmd == "watch":
-        watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")
-        if not watch_path.exists():
-            print(f"error: path not found: {watch_path}", file=sys.stderr)
-            sys.exit(1)
-        from paragraph.watch import watch as _watch
-        try:
-            _watch(watch_path)
-        except ImportError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-    elif cmd == "analyze":
-        watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")
-        graph_json = watch_path / "graphify-out" / "graph.json"
-        if not graph_json.exists():
-            print(f"error: no graph found at {graph_json} — run /paragraph first", file=sys.stderr)
-            sys.exit(1)
-        from networkx.readwrite import json_graph as _jg
-        from paragraph.cluster import score_all
-        from paragraph.insights import insights_markdown, load_history, record_history
-        data = json.loads(graph_json.read_text(encoding="utf-8"))
-        try:
-            G = _jg.node_link_graph(data, edges="links")
-        except TypeError:
-            G = _jg.node_link_graph(data)
-        communities: dict[int, list[str]] = {}
-        for node in data.get("nodes", []):
-            cid = node.get("community")
-            if cid is not None:
-                communities.setdefault(int(cid), []).append(node["id"])
-        if not communities:
-            print("error: graph.json has no community assignments — run cluster-only first", file=sys.stderr)
-            sys.exit(1)
-        labels = {
-            int(k): v
-            for k, v in (data.get("graph", {}).get("community_labels") or {}).items()
-            if str(k).lstrip("-").isdigit()
-        }
-        cohesion = score_all(G, communities)
-        out_dir = watch_path / "graphify-out"
-        record_history(out_dir, G, communities)
-        md = insights_markdown(G, communities, cohesion, labels or None,
-                               history=load_history(out_dir))
-        out_path = watch_path / "graphify-out" / "GRAPH_INSIGHTS.md"
-        out_path.write_text(md, encoding="utf-8")
-        print(md)
-        print(f"Written to {out_path}")
-
-    elif cmd == "advise":
-        watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")
-        from paragraph.advise import run as _run_advise
-        sys.exit(_run_advise(watch_path))
-
-    elif cmd == "connect-chunks":
-        watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")
-        graph_json = watch_path / "graphify-out" / "graph.json"
-        if not graph_json.exists():
-            print(f"error: no graph found at {graph_json} — run /paragraph first", file=sys.stderr)
-            sys.exit(1)
-        from paragraph.build import connect_orphan_chunks
-        data = json.loads(graph_json.read_text(encoding="utf-8"))
-        data, stats = connect_orphan_chunks(data)
-        if stats["linked"] == 0:
-            print("No orphaned document/rationale chunks found — nothing to connect.")
-            sys.exit(0)
-        graph_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        print(f"Linked {stats['linked']} orphaned chunk(s) across {stats['files']} file(s) "
-              f"({stats['file_nodes_created']} file node(s) created).")
-        print(f"Run `paragraph cluster-only {watch_path}` to re-cluster and refresh the report/viz.")
-
-    elif cmd == "prune-generic":
-        args = sys.argv[2:]
-        watch_path = Path(".")
-        extra: set[str] = set()
-        keep: set[str] = set()
-        dry_run = False
-        i = 0
-        while i < len(args):
-            if args[i] == "--also" and i + 1 < len(args):
-                extra |= {s.strip().lower() for s in args[i + 1].split(",") if s.strip()}
-                i += 2
-            elif args[i] == "--keep" and i + 1 < len(args):
-                keep |= {s.strip().lower() for s in args[i + 1].split(",") if s.strip()}
-                i += 2
-            elif args[i] == "--dry-run":
-                dry_run = True; i += 1
-            elif not args[i].startswith("--"):
-                watch_path = Path(args[i]); i += 1
-            else:
-                i += 1
-        graph_json = watch_path / "graphify-out" / "graph.json"
-        if not graph_json.exists():
-            print(f"error: no graph found at {graph_json} — run /paragraph first", file=sys.stderr)
-            sys.exit(1)
-        from paragraph.stoplist import prune_generic
-        data = json.loads(graph_json.read_text(encoding="utf-8"))
-        n_before = len(data.get("nodes", []))
-        e_before = len(data.get("links", data.get("edges", [])))
-        data, stats = prune_generic(data, extra_stoplist=frozenset(extra), keep=frozenset(keep))
-        n_after = len(data.get("nodes", []))
-        e_after = len(data.get("links", data.get("edges", [])))
-        print(f"Shadow nodes merged into real definitions: {stats['merged']} "
-              f"({stats['edges_remapped']} edge(s) remapped)")
-        print(f"Generic symbols dropped: {stats['dropped']}")
-        print(f"Nodes: {n_before} -> {n_after} | Edges: {e_before} -> {e_after}")
-        if dry_run:
-            print("Dry run — graph.json not modified.")
-            sys.exit(0)
-        if stats["merged"] == 0 and stats["dropped"] == 0:
-            print("Nothing to prune.")
-            sys.exit(0)
-        graph_json.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        print(f"Run `paragraph cluster-only {watch_path}` to re-cluster and refresh the report/viz.")
-
-    elif cmd == "link":
-        args = sys.argv[2:]
-        watch_path = Path(".")
-        threshold = 0.78
-        top_k = 3
-        types = ("document", "rationale")
-        dry_run = False
-        i = 0
-        while i < len(args):
-            if args[i] == "--threshold" and i + 1 < len(args):
-                threshold = float(args[i + 1]); i += 2
-            elif args[i] == "--top-k" and i + 1 < len(args):
-                top_k = int(args[i + 1]); i += 2
-            elif args[i] == "--types" and i + 1 < len(args):
-                types = tuple(s.strip() for s in args[i + 1].split(",") if s.strip())
-                i += 2
-            elif args[i] == "--dry-run":
-                dry_run = True; i += 1
-            elif not args[i].startswith("--"):
-                watch_path = Path(args[i]); i += 1
-            else:
-                i += 1
-        from paragraph.link import run as _run_link
-        sys.exit(_run_link(watch_path, threshold=threshold, top_k=top_k,
-                           source_types=types, dry_run=dry_run))
-
-    elif cmd == "serve":
-        graph_arg = sys.argv[2] if len(sys.argv) > 2 else "graphify-out/graph.json"
-        graph_path = Path(graph_arg)
-        if graph_path.is_dir():
-            graph_path = graph_path / "graphify-out" / "graph.json"
-        from paragraph.serve import serve as _serve
-        _serve(str(graph_path))
-
-    elif cmd == "enrich":
-        args = sys.argv[2:]
-        target = Path(".")
-        bodies_only = embed_only = stats_only = full = False
-        model = "nomic-embed-text"
-        i = 0
-        while i < len(args):
-            if args[i] == "--bodies-only":
-                bodies_only = True; i += 1
-            elif args[i] == "--embed-only":
-                embed_only = True; i += 1
-            elif args[i] == "--stats":
-                stats_only = True; i += 1
-            elif args[i] == "--full":
-                full = True; i += 1
-            elif args[i] == "--model" and i + 1 < len(args):
-                model = args[i + 1]; i += 2
-            elif not args[i].startswith("--"):
-                target = Path(args[i]); i += 1
-            else:
-                i += 1
-        from paragraph.enrich import run as _run_enrich
-        sys.exit(_run_enrich(target, bodies_only=bodies_only, embed_only=embed_only,
-                             stats_only=stats_only, full=full, model=model))
-
-    elif cmd == "cluster-only":
-        watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")
-        graph_json = watch_path / "graphify-out" / "graph.json"
-        if not graph_json.exists():
-            print(f"error: no graph found at {graph_json} — run /paragraph first", file=sys.stderr)
-            sys.exit(1)
-        from networkx.readwrite import json_graph as _jg
-        from paragraph.build import build_from_json
-        from paragraph.cluster import cluster, score_all
-        from paragraph.analyze import god_nodes, surprising_connections, suggest_questions
-        from paragraph.report import (generate, freshness_report, root_label,
-                                      stable_mode_default, FRESHNESS_FILENAME)
-        from paragraph.export import to_json, to_html_auto
-        print("Loading existing graph...")
-        _raw = json.loads(graph_json.read_text(encoding="utf-8"))
-        G = build_from_json(_raw)
-        print(f"Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
-        print("Re-clustering...")
-        communities = cluster(G)
-        cohesion = score_all(G, communities)
-        gods = god_nodes(G)
-        surprises = surprising_connections(G, communities)
-        from paragraph.cluster import carry_over_labels
-        old_labels = {
-            int(k): v
-            for k, v in (_raw.get("graph", {}).get("community_labels") or {}).items()
-            if str(k).lstrip("-").isdigit()
-        }
-        old_node_communities = {
-            n["id"]: n["community"] for n in _raw.get("nodes", [])
-            if n.get("community") is not None
-        }
-        labels = carry_over_labels(G, communities, old_node_communities, old_labels)
-        questions = suggest_questions(G, communities, labels)
-        tokens = {"input": 0, "output": 0}
-        report = generate(G, communities, cohesion, labels, gods, surprises,
-                          {"warning": "cluster-only mode — file stats not available"},
-                          tokens, root_label(watch_path), suggested_questions=questions)
-        out = watch_path / "graphify-out"
-        (out / "GRAPH_REPORT.md").write_text(report, encoding="utf-8")
-        if stable_mode_default(out, str(watch_path)):
-            (out / FRESHNESS_FILENAME).write_text(
-                freshness_report(
-                    {"warning": "cluster-only mode — file stats not available"},
-                    root_label(watch_path), out_dir=out),
-                encoding="utf-8")
-        to_json(G, communities, str(out / "graph.json"), community_labels=labels)
-        from paragraph.insights import record_history
-        record_history(out, G, communities)
-        viz = to_html_auto(G, communities, str(out / "graph.html"), community_labels=labels or None)
-        if viz == "aggregated":
-            print("Graph too large for full viz — graph.html shows the aggregated community view.")
-        html_part = " graph.json and graph.html" if viz != "skipped" else " and graph.json"
-        print(f"Done — {len(communities)} communities. GRAPH_REPORT.md,{html_part} updated.")
-
-    elif cmd == "update":
-        watch_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path(".")
-        if not watch_path.exists():
-            print(f"error: path not found: {watch_path}", file=sys.stderr)
-            sys.exit(1)
-        from paragraph.watch import _rebuild_code
-        print(f"Re-extracting code files in {watch_path} (no LLM needed)...")
-        ok = _rebuild_code(watch_path)
-        if ok:
-            print("Code graph updated. For doc/paper/image changes run /paragraph --update in your AI assistant.")
-        else:
-            print("Nothing to update or rebuild failed — check output above.", file=sys.stderr)
-            sys.exit(1)
-
-    elif cmd == "ingest-claude-mem":
-        if len(sys.argv) < 3:
-            print("Usage: paragraph ingest-claude-mem <project-path> [--db path] [--graph path] [--project name] [--config path]", file=sys.stderr)
-            sys.exit(1)
-        project_path = Path(sys.argv[2])
-        if not project_path.exists():
-            print(f"error: path not found: {project_path}", file=sys.stderr)
-            sys.exit(1)
-        db_path: Path | None = None
-        cm_graph_path: Path | None = None
-        cm_project: str | None = None
-        cm_config: Path | None = None
-        args = sys.argv[3:]
-        i = 0
-        while i < len(args):
-            if args[i] == "--db" and i + 1 < len(args):
-                db_path = Path(args[i + 1]); i += 2
-            elif args[i] == "--graph" and i + 1 < len(args):
-                cm_graph_path = Path(args[i + 1]); i += 2
-            elif args[i] == "--project" and i + 1 < len(args):
-                cm_project = args[i + 1]; i += 2
-            elif args[i] == "--config" and i + 1 < len(args):
-                cm_config = Path(args[i + 1]); i += 2
-            else:
-                i += 1
-        from paragraph.ingest_claudemem import run as _run_claudemem
-        sys.exit(_run_claudemem(project_path, db_path=db_path, graph_path=cm_graph_path,
-                                project=cm_project, config_path=cm_config))
-
-    elif cmd == "check-update":
-        if len(sys.argv) < 3:
-            print("Usage: paragraph check-update <path>", file=sys.stderr)
-            sys.exit(1)
-        from paragraph.watch import check_update
-        check_update(Path(sys.argv[2]).resolve())
-        sys.exit(0)
-    elif cmd == "merge-graphs":
-        # paragraph merge-graphs graph1.json graph2.json ... --out merged.json
-        args = sys.argv[2:]
-        graph_paths: list[Path] = []
-        out_path = Path("graphify-out/merged-graph.json")
-        i = 0
-        while i < len(args):
-            if args[i] == "--out" and i + 1 < len(args):
-                out_path = Path(args[i + 1]); i += 2
-            else:
-                graph_paths.append(Path(args[i])); i += 1
-        if len(graph_paths) < 2:
-            print("Usage: paragraph merge-graphs <graph1.json> <graph2.json> [...] [--out merged.json]", file=sys.stderr)
-            sys.exit(1)
-        import networkx as _nx
-        from networkx.readwrite import json_graph as _jg
-        graphs = []
-        for gp in graph_paths:
-            if not gp.exists():
-                print(f"error: not found: {gp}", file=sys.stderr)
-                sys.exit(1)
-            data = json.loads(gp.read_text(encoding="utf-8"))
-            try:
-                G = _jg.node_link_graph(data, edges="links")
-            except TypeError:
-                G = _jg.node_link_graph(data)
-            # Tag every node with which repo it came from
-            repo_tag = gp.parent.parent.name  # graphify-out/../ → repo dir name
-            for node in G.nodes:
-                G.nodes[node].setdefault("repo", repo_tag)
-            graphs.append(G)
-        merged = _nx.compose_all(graphs)
-        try:
-            out_data = _jg.node_link_data(merged, edges="links")
-        except TypeError:
-            out_data = _jg.node_link_data(merged)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(out_data, indent=2), encoding="utf-8")
-        print(f"Merged {len(graphs)} graphs → {merged.number_of_nodes()} nodes, {merged.number_of_edges()} edges")
-        print(f"Written to: {out_path}")
-
-    elif cmd == "clone":
-        if len(sys.argv) < 3:
-            print("Usage: paragraph clone <github-url> [--branch <branch>] [--out <dir>]", file=sys.stderr)
-            sys.exit(1)
-        url = sys.argv[2]
-        branch: str | None = None
-        out_dir: Path | None = None
-        args = sys.argv[3:]
-        i = 0
-        while i < len(args):
-            if args[i] == "--branch" and i + 1 < len(args):
-                branch = args[i + 1]; i += 2
-            elif args[i] == "--out" and i + 1 < len(args):
-                out_dir = Path(args[i + 1]); i += 2
-            else:
-                i += 1
-        local_path = _clone_repo(url, branch=branch, out_dir=out_dir)
-        print(local_path)
-
-    elif cmd == "benchmark":
-        from paragraph.benchmark import run_benchmark, print_benchmark
-        graph_path = sys.argv[2] if len(sys.argv) > 2 else "graphify-out/graph.json"
-        # Try to load corpus_words from detect output
-        corpus_words = None
-        detect_path = Path(".graphify_detect.json")
-        if detect_path.exists():
-            try:
-                detect_data = json.loads(detect_path.read_text(encoding="utf-8"))
-                corpus_words = detect_data.get("total_words")
-            except Exception:
-                pass
-        result = run_benchmark(graph_path, corpus_words=corpus_words)
-        print_benchmark(result)
-    else:
-        print(f"error: unknown command '{cmd}'", file=sys.stderr)
-        print("Run 'paragraph --help' for usage.", file=sys.stderr)
-        sys.exit(1)
+    parser = _build_parser()
+    if not argv:
+        parser.print_help()
+        return
+    ns = parser.parse_args(argv)
+    ns.func(ns)
 
 
 if __name__ == "__main__":
