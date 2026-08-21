@@ -78,6 +78,27 @@ def test_metatype_self_reference(tmp_path):
     assert ("uses_contentview", "defs_person") in _rel(result, "references")
 
 
+def test_static_call_receiver_referenced(tmp_path):
+    (tmp_path / "Resolver.swift").write_text(
+        "enum DateResolver { static func resolve(_ s: String) -> String? { nil } }\n")
+    (tmp_path / "Caller.swift").write_text(
+        "struct Intent {\n    func run(_ text: String) {\n"
+        "        let due = DateResolver.resolve(text)\n        _ = due\n    }\n}\n")
+    result = extract([tmp_path / "Resolver.swift", tmp_path / "Caller.swift"],
+                     cache_root=tmp_path)
+    assert ("caller_intent", "resolver_dateresolver") in _rel(result, "references")
+
+
+def test_qualified_nested_type_references_outer(tmp_path):
+    (tmp_path / "Service.swift").write_text(
+        "final class RefinementService { struct Result { } }\n")
+    (tmp_path / "User.swift").write_text(
+        "struct Wrapper {\n    let r: RefinementService.Result\n}\n")
+    result = extract([tmp_path / "Service.swift", tmp_path / "User.swift"],
+                     cache_root=tmp_path)
+    assert ("user_wrapper", "service_refinementservice") in _rel(result, "references")
+
+
 def test_generic_conformance_not_synthesized(tmp_path):
     (tmp_path / "One.swift").write_text(
         "struct Thing: Sendable, Equatable { var x: Int }\n")

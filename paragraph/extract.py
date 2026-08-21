@@ -15,7 +15,7 @@ from .cache import load_cached, save_cached
 # per-file cache entries (keyed on file content, not extractor code) are
 # re-extracted. Only entries carrying a raw_calls key (AST results) are
 # affected — semantic LLM cache entries are never invalidated by this.
-_AST_EXTRACTOR_VERSION = 2
+_AST_EXTRACTOR_VERSION = 3
 
 
 def _make_id(*parts: str) -> str:
@@ -1024,18 +1024,21 @@ def _extract_generic(path: Path, config: LanguageConfig) -> dict:
             if node.type in _TYPE_REF_SKIP:
                 return
             if node.type == "user_type":
+                # Record the outer AND inner identifiers of qualified types:
+                # `Service.Result` references Service (the cross-file anchor)
+                # as much as Result.
                 idents = [c for c in node.children if c.type == "type_identifier"]
                 if idents:
-                    _record_type_ref(_read_text(idents[-1], source), node)
+                    _record_type_ref(_read_text(idents[0], source), node)
+                    if len(idents) > 1:
+                        _record_type_ref(_read_text(idents[-1], source), node)
                 return
             if node.type == "navigation_expression":
-                # `Person.self` — a metatype reference, not a call
+                # Uppercase base = a type used as receiver: `Person.self`
+                # metatypes and static calls (`DateResolver.resolve(text)`).
                 kids = node.children
-                if (len(kids) == 2 and kids[0].type == "simple_identifier"
-                        and kids[1].type == "navigation_suffix"
-                        and _read_text(kids[1], source) == ".self"):
+                if kids and kids[0].type == "simple_identifier":
                     _record_type_ref(_read_text(kids[0], source), node)
-                    return
             for child in node.children:
                 _walk_type_refs(child)
 

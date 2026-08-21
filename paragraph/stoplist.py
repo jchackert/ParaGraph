@@ -82,15 +82,20 @@ def resolve_shadow_nodes(
     """Merge shadow nodes into their real definitions, drop stoplisted ones.
 
     A shadow node is a synthesized node with an empty/missing source_file.
-    - If a real node (non-empty source_file, file_type code) shares its label
-      (case-insensitive), the shadow is removed and its edges are remapped to
-      the real node.
-    - Else, if its label is stoplisted, the shadow and its edges are dropped.
+    - If its label is stoplisted, the shadow and its edges are dropped — even
+      when the project has a real node with that label. Swift projects extend
+      framework types (`extension View { ... }` produces a real node labeled
+      View), and merging every `: View` conformance into that extension node
+      would recreate the god node the stoplist exists to remove.
+    - Else, if a real node (non-empty source_file, file_type code) shares its
+      label (case-insensitive), the shadow is removed and its edges are
+      remapped to the real node.
     - Else it is kept (external symbol worth tracking, e.g. a third-party type).
 
-    `keep` exempts labels from the stoplist. Returns (nodes, edges, stats).
-    Deterministic: when several real nodes share a label, the first in node
-    order wins.
+    `keep` exempts labels from the stoplist (restoring merge for a project
+    that genuinely owns a type with a stoplisted name). Returns
+    (nodes, edges, stats). Deterministic: when several real nodes share a
+    label, the first in node order wins.
     """
     keep_keys = {k.lower() for k in keep}
 
@@ -110,11 +115,12 @@ def resolve_shadow_nodes(
         key = label.strip().strip("()").lstrip(".").lower()
         if not key:
             continue
+        if key not in keep_keys and is_stoplisted(label, extra_stoplist):
+            drop.add(n["id"])
+            continue
         real = real_by_label.get(key)
         if real and real != n["id"]:
             remap[n["id"]] = real
-        elif key not in keep_keys and is_stoplisted(label, extra_stoplist):
-            drop.add(n["id"])
 
     if not remap and not drop:
         return nodes, edges, {"merged": 0, "dropped": 0, "edges_removed": 0, "edges_remapped": 0}

@@ -9,6 +9,9 @@
 - **Swift reference extraction** -- the call-graph pass only walked named function bodies, so a SwiftUI app's densest reference sites were invisible. Now extracted: calls in property initializers (`@State var x = Coordinator()`) and computed-property bodies (`var body: some View { ... }`), both attributed to the enclosing type; plus `references` INFERRED edges for type annotations (`var zone: AttentionZone`) and metatype uses (`[Person.self]`), deduped per referrer and stoplist-filtered. In a real corpus this un-isolates model/service types that were referenced only from these sites
 - **Cross-file call resolution prefers real definitions** -- label collisions between a synthesized shadow node and a real definition now resolve to the real one
 - **AST cache versioning** -- per-file AST cache entries are stamped with an extractor version and re-extracted when the extractor changes; semantic (LLM) cache entries are untouched, so no re-extraction cost
+- **Swift static receivers + qualified types** -- `DateResolver.resolve(text)` and `Service.Result` now produce `references` edges to the receiver/outer type; previously only the method suffix was extracted, leaving statically-used services isolated
+- **Stoplist beats shadow-merge** -- `extension View { }` creates a real node labeled View; merging every `: View` conformance into it silently recreated the god node (observed: 94 edges). Stoplisted labels now always drop the shadow; `--keep` restores merge for projects that genuinely own such a name
+- **Fix: `ingest-claude-mem` can no longer wipe observations on a project-name miss** -- re-injection deletes existing claudemem nodes first, so a query matching 0 observations (wrong `--project`, e.g. a case difference like `Para_Note` vs `PARA_Note`) destroyed all previously ingested nodes. The DB match is now case-insensitive, and a 0-match run aborts before deletion when claudemem nodes already exist
 
 ## 0.2.0
 

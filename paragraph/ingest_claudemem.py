@@ -453,7 +453,7 @@ def fetch_observations(db_path: Path, project: str, types: tuple) -> list[dict]:
         SELECT id, title, subtitle, narrative, facts, concepts,
                files_read, files_modified, type, agent_id, agent_type, created_at
         FROM observations
-        WHERE project = ? AND type IN ({placeholders})
+        WHERE project = ? COLLATE NOCASE AND type IN ({placeholders})
         ORDER BY created_at ASC
         """,
         (project, *types),
@@ -573,8 +573,22 @@ def run(
     existing_nodes: list[dict] = graph.get("nodes", [])
     existing_links: list[dict] = graph.get("links", [])
 
-    # Remove stale claudemem nodes/links so the injection is idempotent
+    print(f"Fetching observations from {db_path} ...")
+    raw_observations = fetch_observations(db_path, target_project, TARGET_TYPES)
+    print(f"Found {len(raw_observations)} raw observations (types: {TARGET_TYPES}, project: {target_project}).")
+
+    # Guard against silent data loss: re-injection starts by deleting every
+    # existing claudemem_* node, so a query that matches nothing (wrong
+    # --project name, moved DB) must abort BEFORE the deletion, not after.
     stale_nodes = {n["id"] for n in existing_nodes if n["id"].startswith("claudemem_")}
+    if not raw_observations and stale_nodes:
+        print(f"error: 0 observations matched project '{target_project}' but the graph "
+              f"already holds {len(stale_nodes)} claudemem node(s). Refusing to wipe them — "
+              f"check --project (DB project names are matched case-insensitively but must "
+              f"otherwise be exact).", file=sys.stderr)
+        return 1
+
+    # Remove stale claudemem nodes/links so the injection is idempotent
     if stale_nodes:
         print(f"Removing {len(stale_nodes)} stale claudemem nodes before re-injection.")
     existing_nodes = [n for n in existing_nodes if n["id"] not in stale_nodes]
@@ -587,10 +601,6 @@ def run(
     path_index = build_path_index(existing_nodes)
     print(f"Indexes built: {len(path_index)} source paths, {len(stem_index)} stems "
           f"across {len(existing_nodes)} nodes.")
-
-    print(f"Fetching observations from {db_path} ...")
-    raw_observations = fetch_observations(db_path, target_project, TARGET_TYPES)
-    print(f"Found {len(raw_observations)} raw observations (types: {TARGET_TYPES}, project: {target_project}).")
 
     type_counts = Counter(o["type"] for o in raw_observations)
     for t, c in sorted(type_counts.items()):

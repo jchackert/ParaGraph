@@ -57,8 +57,10 @@ def test_merge_shadow_into_real_definition():
     assert e2[0]["target"] == "base_baseservice"
 
 
-def test_merge_wins_over_stoplist():
-    # A project that defines its own type named View keeps it.
+def test_stoplist_wins_over_merge():
+    # `extension View { }` produces a real node labeled View; merging every
+    # `: View` conformance into it would recreate the god node. The shadow
+    # drops; the extension node itself survives untouched.
     nodes = [
         _node("b_bar", "Bar", source_file="src/b.swift"),
         _node("view", "View", source_file=""),                      # shadow
@@ -66,8 +68,21 @@ def test_merge_wins_over_stoplist():
     ]
     edges = [_edge("b_bar", "view")]
     n2, e2, stats = resolve_shadow_nodes(nodes, edges)
+    assert stats["merged"] == 0
+    assert stats["dropped"] == 1
+    assert {n["id"] for n in n2} == {"b_bar", "myviews_view"}
+    assert e2 == []
+
+
+def test_keep_restores_merge_for_project_owned_name():
+    nodes = [
+        _node("b_bar", "Bar", source_file="src/b.swift"),
+        _node("view", "View", source_file=""),                      # shadow
+        _node("myviews_view", "View", source_file="src/MyViews.swift"),
+    ]
+    edges = [_edge("b_bar", "view")]
+    n2, e2, stats = resolve_shadow_nodes(nodes, edges, keep={"view"})
     assert stats["merged"] == 1
-    assert stats["dropped"] == 0
     assert e2[0]["target"] == "myviews_view"
 
 

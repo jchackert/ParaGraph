@@ -257,6 +257,28 @@ def test_explicit_project_override(tmp_path):
     assert {n["id"] for n in _claudemem_nodes(graph_path)} == {"claudemem_5"}
 
 
+def test_project_name_matched_case_insensitively(tmp_path):
+    rows = [dict(_default_rows()[0], project="PARA_Note")]
+    project, db, graph_path = _setup(tmp_path, rows)
+    rc = run(project, db_path=db, project="Para_Note")
+    assert rc == 0
+    assert len(_claudemem_nodes(graph_path)) == 1
+
+
+def test_zero_matches_never_wipe_existing_nodes(tmp_path, capsys):
+    # First ingest succeeds; a later run with a wrong project name must
+    # refuse to delete the nodes it injected earlier.
+    project, db, graph_path = _setup(tmp_path)
+    assert run(project, db_path=db) == 0
+    before = {n["id"] for n in _claudemem_nodes(graph_path)}
+    assert before
+
+    rc = run(project, db_path=db, project="NoSuchProject")
+    assert rc == 1
+    assert {n["id"] for n in _claudemem_nodes(graph_path)} == before
+    assert "Refusing to wipe" in capsys.readouterr().err
+
+
 def test_ingest_config_domain_keywords_boost_score():
     from paragraph.ingest_claudemem import IngestConfig, filter_observation
     obs = {
