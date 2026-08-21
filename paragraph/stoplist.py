@@ -22,6 +22,8 @@
 
 from __future__ import annotations
 
+from .schema import edge_endpoints, set_edge_endpoints, edge_list, edge_list_key
+
 # Case-insensitive. Swift stdlib/SwiftUI/Foundation protocols and types that
 # appear as conformance targets, plus Python/Java/C# equivalents. A name is
 # only ever suppressed when the project does NOT define a type of the same
@@ -132,8 +134,7 @@ def resolve_shadow_nodes(
     edges_removed = 0
     edges_remapped = 0
     for e in edges:
-        src = e.get("source", e.get("_src"))
-        tgt = e.get("target", e.get("_tgt"))
+        src, tgt = edge_endpoints(e)
         if src in drop or tgt in drop:
             edges_removed += 1
             continue
@@ -153,12 +154,7 @@ def resolve_shadow_nodes(
         if mapped:
             edges_remapped += 1
             e = dict(e)
-            if "source" in e or "target" in e:
-                e["source"] = src
-                e["target"] = tgt
-            if "_src" in e or "_tgt" in e:
-                e["_src"] = src
-                e["_tgt"] = tgt
+            set_edge_endpoints(e, src, tgt)
         new_edges.append(e)
 
     stats = {
@@ -175,14 +171,10 @@ def prune_generic(graph_data: dict, *,
                   keep: frozenset[str] | set[str] = frozenset()) -> tuple[dict, dict]:
     """Apply resolve_shadow_nodes to a loaded graph.json dict (links schema)."""
     nodes = graph_data.get("nodes", [])
-    edges = graph_data.get("links", graph_data.get("edges", []))
+    edges = edge_list(graph_data)
     new_nodes, new_edges, stats = resolve_shadow_nodes(
         nodes, edges, extra_stoplist=extra_stoplist, keep=keep)
     out = dict(graph_data)
     out["nodes"] = new_nodes
-    if "links" in graph_data or "edges" not in graph_data:
-        out["links"] = new_edges
-        out.pop("edges", None)
-    else:
-        out["edges"] = new_edges
+    out[edge_list_key(graph_data)] = new_edges
     return out, stats

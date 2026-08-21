@@ -1,8 +1,10 @@
 # validate extraction JSON against the graphify schema before graph assembly
 from __future__ import annotations
 
-VALID_FILE_TYPES = {"code", "document", "paper", "image", "rationale", "observation"}
-VALID_CONFIDENCES = {"EXTRACTED", "INFERRED", "AMBIGUOUS"}
+# Canonical definitions live in schema.py; re-exported here because build.py
+# and older callers import them from this module.
+from .schema import VALID_FILE_TYPES, VALID_CONFIDENCES
+
 REQUIRED_NODE_FIELDS = {"id", "label", "file_type", "source_file"}
 REQUIRED_EDGE_FIELDS = {"source", "target", "relation", "confidence", "source_file"}
 

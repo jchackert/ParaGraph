@@ -18,7 +18,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
-EDGE_ORIGIN = "paragraph-link"
+from .schema import LINK_EDGE_ORIGIN as EDGE_ORIGIN
+from .schema import edge_endpoints, edge_list, edge_list_key
 DEFAULT_THRESHOLD = 0.78
 DEFAULT_TOP_K = 3
 
@@ -126,7 +127,7 @@ def link_similar(graph_data: dict, vectors_db: Path, *,
     new link edge — the relation is already known more precisely.
     """
     nodes = graph_data.get("nodes", [])
-    edges = graph_data.get("links", graph_data.get("edges", []))
+    edges = edge_list(graph_data)
 
     kept_edges = [e for e in edges if e.get("origin") != EDGE_ORIGIN]
     removed = len(edges) - len(kept_edges)
@@ -138,12 +139,9 @@ def link_similar(graph_data: dict, vectors_db: Path, *,
     src_vecs = _load_embeddings(vectors_db, src_ids)
     tgt_vecs = _load_embeddings(vectors_db, tgt_ids)
 
-    def _endpoints(e: dict) -> tuple[str | None, str | None]:
-        return (e.get("source", e.get("_src")), e.get("target", e.get("_tgt")))
-
     already = set()
     for e in kept_edges:
-        s, t = _endpoints(e)
+        s, t = edge_endpoints(e)
         already.add((s, t))
         already.add((t, s))
 
@@ -168,8 +166,7 @@ def link_similar(graph_data: dict, vectors_db: Path, *,
             })
 
     out = dict(graph_data)
-    key = "links" if ("links" in graph_data or "edges" not in graph_data) else "edges"
-    out[key] = kept_edges + new_edges
+    out[edge_list_key(graph_data)] = kept_edges + new_edges
     stats = {
         "removed_stale": removed,
         "added": len(new_edges),

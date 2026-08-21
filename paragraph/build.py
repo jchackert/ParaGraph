@@ -104,6 +104,15 @@ def build_from_json(extraction: dict, *, directed: bool = False) -> nx.Graph:
     real_errors = [e for e in errors if "does not match any node id" not in e]
     if real_errors:
         print(f"[paragraph] Extraction warning ({len(real_errors)} issues): {real_errors[0]}", file=sys.stderr)
+    # Vocabulary drift: relations outside schema.KNOWN_RELATIONS still build,
+    # but drift is surfaced so it gets folded into the vocabulary (or fixed)
+    # instead of accumulating silently.
+    from .schema import unknown_relations
+    drift = unknown_relations(extraction.get("edges", []))
+    if drift:
+        summary = ", ".join(f"{r} x{c}" for r, c in drift.most_common(5))
+        print(f"[paragraph] WARNING: {sum(drift.values())} edge(s) use relations outside "
+              f"the known vocabulary: {summary} — see paragraph/schema.py", file=sys.stderr)
     G: nx.Graph = nx.DiGraph() if directed else nx.Graph()
     for node in extraction.get("nodes", []):
         G.add_node(node["id"], **{k: v for k, v in node.items() if k != "id"})
