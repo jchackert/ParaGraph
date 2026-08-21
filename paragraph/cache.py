@@ -50,18 +50,26 @@ def cache_dir(root: Path = Path(".")) -> Path:
     return d
 
 
-def load_cached(path: Path, root: Path = Path(".")) -> dict | None:
+def load_cached(path: Path, root: Path = Path("."), kind: str = "semantic") -> dict | None:
     """Return cached extraction for this file if hash matches, else None.
 
     Cache key: SHA256 of file contents.
-    Cache value: stored as graphify-out/cache/{hash}.json
+    Cache value: stored as graphify-out/cache/{hash}.json (semantic, the
+    legacy namespace) or {hash}.ast.json (AST).
+
+    The two namespaces MUST stay separate: they used to share {hash}.json,
+    and a file that ever received a semantic (LLM) fragment silently lost
+    its entire AST extraction on every `paragraph update` — the semantic
+    entry was returned as if it were the file's full structural extraction.
+
     Returns None if no cache entry or file has changed.
     """
     try:
         h = file_hash(path, root)
     except OSError:
         return None
-    entry = cache_dir(root) / f"{h}.json"
+    suffix = ".ast.json" if kind == "ast" else ".json"
+    entry = cache_dir(root) / f"{h}{suffix}"
     if not entry.exists():
         return None
     try:
@@ -70,11 +78,13 @@ def load_cached(path: Path, root: Path = Path(".")) -> dict | None:
         return None
 
 
-def save_cached(path: Path, result: dict, root: Path = Path(".")) -> None:
+def save_cached(path: Path, result: dict, root: Path = Path("."), kind: str = "semantic") -> None:
     """Save extraction result for this file.
 
-    Stores as graphify-out/cache/{hash}.json where hash = SHA256 of current file contents.
-    result should be a dict with 'nodes' and 'edges' lists.
+    Stores as graphify-out/cache/{hash}.json (semantic) or {hash}.ast.json
+    (AST), where hash = SHA256 of current file contents. See load_cached for
+    why the namespaces are separate. result should be a dict with 'nodes'
+    and 'edges' lists.
 
     No-ops if `path` is not a regular file. Subagent-produced semantic fragments
     occasionally carry a directory path in `source_file`; skipping them prevents
@@ -84,7 +94,8 @@ def save_cached(path: Path, result: dict, root: Path = Path(".")) -> None:
     if not p.is_file():
         return
     h = file_hash(p, root)
-    entry = cache_dir(root) / f"{h}.json"
+    suffix = ".ast.json" if kind == "ast" else ".json"
+    entry = cache_dir(root) / f"{h}{suffix}"
     tmp = entry.with_suffix(".tmp")
     try:
         tmp.write_text(json.dumps(result), encoding="utf-8")

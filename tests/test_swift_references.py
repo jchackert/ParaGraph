@@ -137,25 +137,31 @@ def test_stale_ast_cache_invalidated_by_version(tmp_path):
     save_cached(f, {"nodes": [{"id": "stale", "label": "Stale",
                                "file_type": "code", "source_file": str(f),
                                "source_location": "L1"}],
-                    "edges": [], "raw_calls": []}, tmp_path)
+                    "edges": [], "raw_calls": []}, tmp_path, kind="ast")
     result = extract([f], cache_root=tmp_path)
     labels = {n["label"] for n in result["nodes"]}
     assert "Stale" not in labels
     assert "Thing" in labels
     # and the refreshed entry is version-stamped
-    cached = load_cached(f, tmp_path)
+    cached = load_cached(f, tmp_path, kind="ast")
     assert cached.get("extractor_version") is not None
 
 
-def test_semantic_cache_entries_untouched(tmp_path):
-    from paragraph.cache import save_cached
+def test_semantic_cache_entry_does_not_mask_ast_extraction(tmp_path):
+    # Regression: AST and semantic caches shared {hash}.json, so a file with
+    # a semantic (LLM) fragment lost its ENTIRE structural extraction on
+    # every `update` — the fragment was returned as the file's extraction.
+    from paragraph.cache import save_cached, load_cached
     f = tmp_path / "One.swift"
     f.write_text("struct Thing { }\n")
-    # semantic entries have no raw_calls key and must survive as-is
-    save_cached(f, {"nodes": [{"id": "sem", "label": "Semantic concept",
-                               "file_type": "rationale", "source_file": str(f),
-                               "source_location": "L1"}],
-                    "edges": []}, tmp_path)
+    semantic = {"nodes": [{"id": "sem", "label": "Semantic concept",
+                           "file_type": "rationale", "source_file": str(f),
+                           "source_location": "L1"}],
+                "edges": []}
+    save_cached(f, semantic, tmp_path)  # legacy/semantic namespace
     result = extract([f], cache_root=tmp_path)
     labels = {n["label"] for n in result["nodes"]}
-    assert "Semantic concept" in labels
+    assert "Thing" in labels                      # AST extraction ran
+    assert "Semantic concept" not in labels       # fragment not misused
+    # the semantic entry survives untouched in its own namespace
+    assert load_cached(f, tmp_path) == semantic

@@ -2362,12 +2362,11 @@ def extract(paths: list[Path], cache_root: Path | None = None) -> dict:
         extractor = _DISPATCH.get(path.suffix)
         if extractor is None:
             continue
-        cached = load_cached(path, cache_root or root)
-        # AST cache entries (identified by their raw_calls key) are invalidated
-        # when the extractor itself changes; semantic (LLM) entries lack
-        # raw_calls and are never invalidated this way — re-extracting those
-        # would cost LLM tokens for identical content.
-        if (cached is not None and "raw_calls" in cached
+        cached = load_cached(path, cache_root or root, kind="ast")
+        # AST cache entries are invalidated when the extractor itself changes.
+        # (Semantic LLM entries live in a separate cache namespace and are
+        # never touched here — re-extracting those would cost LLM tokens.)
+        if (cached is not None
                 and cached.get("extractor_version") != _AST_EXTRACTOR_VERSION):
             cached = None
         if cached is not None:
@@ -2376,7 +2375,7 @@ def extract(paths: list[Path], cache_root: Path | None = None) -> dict:
         result = extractor(path)
         if "error" not in result:
             result["extractor_version"] = _AST_EXTRACTOR_VERSION
-            save_cached(path, result, cache_root or root)
+            save_cached(path, result, cache_root or root, kind="ast")
         per_file.append(result)
     if total >= _PROGRESS_INTERVAL:
         print(f"  AST extraction: {total}/{total} files (100%)", flush=True)
